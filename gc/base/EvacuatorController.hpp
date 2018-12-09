@@ -143,8 +143,8 @@ public:
 	};
 
 	/* hard lower and upper bounds for whitespace allocation and bound to tlh size */
-	const uintptr_t _minimumCopyspaceSize;
 	const uintptr_t _maximumCopyspaceSize;
+	const uintptr_t _minimumCopyspaceSize;
 
 	/* hard lower bound for work packet size can be overridden by configurable bounds */
 	const uintptr_t _minimumWorkspaceSize;
@@ -555,8 +555,8 @@ public:
 		, _evacuateSpaceTop(NULL)
 		, _survivorSpaceBase(NULL)
 		, _survivorSpaceTop(NULL)
-		, _minimumCopyspaceSize(_extensions->objectModel.adjustSizeInBytes(_extensions->scavengerScanCacheMinimumSize))
-		, _maximumCopyspaceSize(_minimumCopyspaceSize << 4)
+		, _maximumCopyspaceSize(_extensions->tlhMaximumSize)
+		, _minimumCopyspaceSize(_maximumCopyspaceSize >> 4)
 		, _minimumWorkspaceSize(_extensions->objectModel.adjustSizeInBytes(_extensions->evacuatorWorkQuantumSize))
 		, _maximumWorkspaceSize(_minimumWorkspaceSize << 4)
 		, _minimumWorkQuanta(_extensions->evacuatorWorkQuanta)

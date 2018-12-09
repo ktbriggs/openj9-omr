@@ -432,10 +432,10 @@ public:
 	}
 
 	/**
-	 * Discards (fills with holes) all whitespace in current whitelist.
+	 * Discards (recycles or fills with holes) all whitespace in current whitelist.
 	 */
 	uintptr_t
-	flush(bool clearCountForTenure = false)
+	flush()
 	{
 		MM_EvacuatorWhitespace *whitespace = top(0);
 		while (NULL != whitespace) {
@@ -453,9 +453,7 @@ public:
 		uintptr_t flushed = _flushed;
 		if (_tenure) {
 			_stats->_tenureDiscardBytes += _flushed;
-			if (clearCountForTenure) {
-				_flushed = 0;
-			}
+			_flushed = 0;
 		} else {
 			_stats->_flipDiscardBytes += _flushed;
 		}

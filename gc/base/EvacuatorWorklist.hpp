@@ -254,7 +254,7 @@ public:
 	 *
 	 * @param work the packet to add
 	 */
-	void
+	MM_EvacuatorWorkPacket *
 	add(MM_EvacuatorWorkPacket *work)
 	{
 		Debug_MM_true((0 == _volume) == (NULL == _head));
@@ -262,19 +262,26 @@ public:
 		Debug_MM_true((_head != _tail) || (NULL == _head) || (volume(_head) == _volume));
 		Debug_MM_true((NULL != work) && (NULL != work->base) && (0 < work->length));
 
-		if (NULL != _tail) {
-			_tail->next = work;
-		} else {
-			_head = work;
-		}
-		work->next = NULL;
-		_tail = work;
-
 		VM_AtomicSupport::addU64(&_volume, volume(work));
+
+		work->next = NULL;
+		if (NULL != _tail) {
+			if ((0 == _tail->offset) && (MM_EvacuatorBase::min_work_packet_size > _tail->length) && ((uintptr_t)work->base == ((uintptr_t)_tail->base + _tail->length))) {
+				_tail->length += work->length;
+			} else {
+				_tail = _tail->next = work;
+				work = NULL;
+			}
+		} else {
+			_head = _tail = work;
+			work = NULL;
+		}
 
 		Debug_MM_true((0 == _volume) == (NULL == _head));
 		Debug_MM_true((NULL == _head) == (NULL == _tail));
 		Debug_MM_true((_head != _tail) || (NULL == _head) || (volume(_head) == _volume));
+
+		return work;
 	}
 
 	/**
@@ -293,6 +300,7 @@ public:
 		if (NULL != work) {
 
 			VM_AtomicSupport::subtractU64(&_volume, volume(work));
+
 			if (work != _tail) {
 				Debug_MM_true(NULL != work->next);
 				_head = work->next;
@@ -325,6 +333,7 @@ public:
 		Debug_MM_true((NULL == _head) == (NULL == _tail));
 
 		VM_AtomicSupport::setU64(&_volume, 0);
+
 		_head = _tail = NULL;
 
 		Debug_MM_true((0 == _volume) == (NULL == _head));

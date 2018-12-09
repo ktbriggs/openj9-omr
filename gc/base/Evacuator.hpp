@@ -92,6 +92,7 @@ private:
 	MM_EvacuatorWorklist _workList;					/* FIFO queue of large packets of unscanned work, in survivor or tenure space */
 	MM_EvacuatorFreelist _freeList;					/* LIFO queue of empty work packets */
 
+	uintptr_t _largeObjectCounter[2];				/* counts large objects overflowing outside copyspaces, reset when outside copyspace is refreshed */
 	uint8_t *_heapBounds[3][2];						/* lower and upper bounds for nursery semispaces and tenure space */
 
 	bool _completedScan;							/* set when heap scan is complete, cleared before heap scan starts */
@@ -111,7 +112,7 @@ private:
 	void flushWork();
 
 	MMINLINE bool setStackLimit();
-	MMINLINE bool reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uintptr_t slotObjectSizeAfterCopy);
+	MMINLINE MM_EvacuatorScanspace *reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uintptr_t slotObjectSizeAfterCopy);
 	MMINLINE MM_EvacuatorScanspace *reserveInsideCopyspace(const EvacuationRegion evacuationRegion, const uintptr_t whiteSize, const uintptr_t slotObjectSizeAfterCopy);
 	MMINLINE MM_EvacuatorScanspace *nextStackFrame(const EvacuationRegion evacuationRegion, MM_EvacuatorScanspace *frame);
 	MMINLINE GC_ObjectScanner *nextObjectScanner(MM_EvacuatorScanspace *const scanspace, bool finalizeObjectScan = true);
@@ -123,7 +124,7 @@ private:
 	MMINLINE void flush();
 	MMINLINE void pop();
 
-	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, bool useLargeObjectCopyspace = false);
+	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, const bool isSplittable);
 	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy);
 
 	MMINLINE omrobjectptr_t copyForward(MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, MM_EvacuatorCopyspace * const copyspace, const uintptr_t originalLength, const uintptr_t forwardedLength);
@@ -436,6 +437,7 @@ public:
 		_typeId = __FUNCTION__;
 
 		_copiedBytesDelta[survivor] = _copiedBytesDelta[tenure] = 0;
+		_largeObjectCounter[survivor] = _largeObjectCounter[tenure] = 0;
 		_whiteStackFrame[survivor] = _whiteStackFrame[tenure] = NULL;
 
 		Debug_MM_true(0 == (_objectModel->getObjectAlignmentInBytes() % sizeof(uintptr_t)));

@@ -24,7 +24,7 @@
 #define EVACUATORBASE_HPP_
 
 #undef EVACUATOR_DEBUG
-#undef EVACUATOR_DEBUG_ALWAYS
+#define EVACUATOR_DEBUG_ALWAYS
 
 #if defined(EVACUATOR_DEBUG) && defined(EVACUATOR_DEBUG_ALWAYS)
 #error "EVACUATOR_DEBUG and EVACUATOR_DEBUG_ALWAYS are mutually exclusive"
@@ -96,9 +96,10 @@ public:
 	/* largest amount of whitespace that can be discarded from the scan stack and outside copyspaces */
 	static const uintptr_t max_scanspace_remainder = 32;
 	static const uintptr_t max_copyspace_remainder = 768;
+	static const uintptr_t max_large_object_sequence = 3;
 
-	/* minimum size of whitespace that is recyclable */
-	static const uintptr_t min_recyclable_whitespace = 768;
+	/* minimum size of whitespace that is recyclable from whitelists */
+	static const uintptr_t min_recyclable_whitespace = 8192;
 
 	/* maximum number of array element slots to include in each split array segment */
 	static const uintptr_t max_split_segment_elements = DEFAULT_ARRAY_SPLIT_MINIMUM_SIZE;
