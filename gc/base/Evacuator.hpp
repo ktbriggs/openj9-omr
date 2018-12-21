@@ -132,13 +132,13 @@ private:
 
 	MMINLINE bool isSplitArrayPacket(MM_EvacuatorWorkPacket *work) { return (0 < work->offset); }
 	MMINLINE bool isSplitablePointerArray(MM_ForwardedHeader *forwardedHeader, uintptr_t objectSizeInBytes);
-	void splitPointerArrayWork(omrobjectptr_t pointerArray);
+	MMINLINE void splitPointerArrayWork(omrobjectptr_t pointerArray);
 
 	MMINLINE void addWork(MM_EvacuatorWorkPacket *work);
 	MMINLINE MM_EvacuatorWorkPacket *findWork();
 	MMINLINE MM_EvacuatorWorkPacket *getWork();
 
-	bool rememberObject(omrobjectptr_t object);
+	MMINLINE bool rememberObject(omrobjectptr_t object);
 	MMINLINE bool isNurseryAge(uintptr_t objectAge) { return (0 == (((uintptr_t)1 << objectAge) & _tenureMask)); }
 	MMINLINE void flushForWaitState();
 	MMINLINE void flushRememberedSet();
@@ -184,13 +184,13 @@ public:
 	 */
 	void tearDown();
 
-	uintptr_t getWorkerIndex() { return _workerIndex; }
-	MM_EnvironmentStandard *getEnvironment() { return _env; }
-	MM_EvacuatorDelegate *getDelegate() { return &_delegate; }
+	MMINLINE uintptr_t getWorkerIndex() { return _workerIndex; }
+	MMINLINE MM_EnvironmentStandard *getEnvironment() { return _env; }
+	MMINLINE MM_EvacuatorDelegate *getDelegate() { return &_delegate; }
 
-	bool isInEvacuate(void *address) { return (_heapBounds[evacuate][0] <= (uint8_t *)address) && ((uint8_t *)address < _heapBounds[evacuate][1]); }
-	bool isInSurvivor(void *address) { return (_heapBounds[survivor][0] <= (uint8_t *)address) && ((uint8_t *)address < _heapBounds[survivor][1]); }
-	bool isInTenure(void *address) { return _env->getExtensions()->isOld((omrobjectptr_t)address); }
+	MMINLINE bool isInEvacuate(void *address) { return (_heapBounds[evacuate][0] <= (uint8_t *)address) && ((uint8_t *)address < _heapBounds[evacuate][1]); }
+	MMINLINE bool isInSurvivor(void *address) { return (_heapBounds[survivor][0] <= (uint8_t *)address) && ((uint8_t *)address < _heapBounds[survivor][1]); }
+	MMINLINE bool isInTenure(void *address) { return _env->getExtensions()->isOld((omrobjectptr_t)address); }
 
 	uintptr_t flushWhitespace(EvacuationRegion region);
 
@@ -200,7 +200,7 @@ public:
 	 * @param address a putative heap address
 	 * @return heap region or unreachable if address not in heap
 	 */
-	EvacuationRegion
+	MMINLINE EvacuationRegion
 	getEvacuationRegion(void *address)
 	{
 		if (isInSurvivor(address)) {
@@ -221,7 +221,7 @@ public:
 	 * @param thisOutsideRegion the outside region to complement
 	 * @return complementary outside region
 	 */
-	EvacuationRegion
+	MMINLINE EvacuationRegion
 	otherOutsideRegion(EvacuationRegion thisOutsideRegion)
 	{
 		Debug_MM_true(tenure >= thisOutsideRegion);
@@ -235,7 +235,7 @@ public:
 	 * @param breadthFirst copy object without recursing into dependent referents
 	 * @return true if the root object was copied to new space (not tenured), false otherwise
 	 */
-	bool
+	MMINLINE bool
 	evacuateRootObject(volatile omrobjectptr_t *slotPtr, bool breadthFirst = false)
 	{
 		omrobjectptr_t object = *slotPtr;
@@ -257,7 +257,7 @@ public:
 	 * @param breadthFirst copy object without recursing into dependent referents
 	 * @return true if the root object was copied to new space (not tenured), false otherwise
 	 */
-	bool
+	MMINLINE bool
 	evacuateRootObject(GC_SlotObject* slotObject, bool breadthFirst = false)
 	{
 		omrobjectptr_t object = slotObject->readReferenceFromSlot();
@@ -351,12 +351,12 @@ public:
 	/**
 	 * Returns true if evacuator is scanning on stack
 	 */
-	bool isInHeapScan() { return !_completedScan; }
+	MMINLINE bool isInHeapScan() { return !_completedScan; }
 
 	/**
 	 * Controller calls this to get the volume of work available on the evacator's work queue.
 	 */
-	uint64_t getVolumeOfWork() { return *(_workList.volume()); }
+	MMINLINE uint64_t getVolumeOfWork() { return *(_workList.volume()); }
 
 	/**
 	 * Controller calls this when it allocates a TLH from survivor or tenure region that is too small to hold

@@ -337,6 +337,7 @@ public:
 	/* these methods return accurate results only when caller holds the controller or evacuator mutex */
 	bool isBoundEvacuator(uintptr_t evacuatorIndex) { return testEvacuatorBit(evacuatorIndex, _boundEvacuatorBitmap); }
 	bool isStalledEvacuator(uintptr_t evacuatorIndex) { return isBoundEvacuator(evacuatorIndex) && testEvacuatorBit(evacuatorIndex, _stalledEvacuatorBitmap); }
+	bool shouldFlushWork() { return (5 < _evacuatorCount) || ((5 * _stalledEvacuatorCount) >= _evacuatorCount); }
 	bool areAnyEvacuatorsStalled() { return (0 < _stalledEvacuatorCount); }
 
 	/**

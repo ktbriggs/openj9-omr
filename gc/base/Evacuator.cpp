@@ -1133,7 +1133,7 @@ MM_Evacuator::setStackLimit()
 {
 	if (!isBreadthFirst()) {
 
-		if (_controller->areAnyEvacuatorsStalled()) {
+		if (_controller->shouldFlushWork()) {
 
 			/* when there >0 stalled evacuators force bread-first flushing to outside copyspaces until this evacuator fills work quota */
 			if (_stackLimit == _stackCeiling) {
@@ -1464,16 +1464,15 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 			copyspace = NULL;
 
 			/* take whitespace from the preferred region whitelist if it is presenting a large space on top */
-			if ((slotObjectSizeAfterCopy <= _whiteList[preferredRegion].top()) && (MM_EvacuatorBase::max_copyspace_remainder <= _whiteList[preferredRegion].top())) {
-
-				/* take top whitespace to load into preferred region copyspace */
+			if (MM_EvacuatorBase::max_copyspace_remainder <= _whiteList[preferredRegion].top()) {
 				whitespace = _whiteList[preferredRegion].top(slotObjectSizeAfterCopy);
+			}
 
-			} else {
+			/* fail over to allocate from the preferred region */
+			if (NULL == whitespace) {
 
 				/* allow large whitespace remainder truncation of after failing to accommodate a series of larger objects */
-				bool allowTruncation = (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[preferredRegion]);
-				/* try to allocate whitespace from the preferred region */
+				bool allowTruncation = (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) && (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[preferredRegion]);
 				whitespace = _controller->getOutsideFreespace(this, preferredRegion, (allowTruncation ? 0 : copyspaceRemainder), slotObjectSizeAfterCopy);
 				if (NULL == whitespace) {
 
@@ -1483,19 +1482,19 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 					if (slotObjectSizeAfterCopy > copyspaceRemainder) {
 
 						/* try to allocate from other region whitelist if it is presenting a large chunk on top */
-						if ((slotObjectSizeAfterCopy <= _whiteList[*evacuationRegion].top()) && (_whiteList[*evacuationRegion].top() >= MM_EvacuatorBase::max_copyspace_remainder)) {
-
+						if (MM_EvacuatorBase::max_copyspace_remainder <= _whiteList[*evacuationRegion].top()) {
 							whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
+						}
 
-						} else {
+						/* fail over to allocate from the other region */
+						if (NULL == whitespace) {
 
 							/* allow large whitespace remainder truncation of after failing to accommodate a series of larger objects */
-							allowTruncation = (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[*evacuationRegion]);
-							/* try to allocate from the other region */
+							allowTruncation = (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) && (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[*evacuationRegion]);
 							whitespace = _controller->getOutsideFreespace(this, *evacuationRegion, (allowTruncation ? 0 : copyspaceRemainder), slotObjectSizeAfterCopy);
 							if (NULL == whitespace) {
 
-								/* last chance -- outside regions and whitelists exhausted, try to steal the whitespace from the stack */
+								/* last chance -- fail over to steal whitespace from the stack */
 								if ((NULL != _whiteStackFrame[preferredRegion]) && (slotObjectSizeAfterCopy <= _whiteStackFrame[preferredRegion]->getWhiteSize())) {
 
 									whitespace = _whiteStackFrame[preferredRegion]->trim();
