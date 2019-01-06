@@ -250,7 +250,15 @@ MM_Evacuator::evacuateRootObject(MM_ForwardedHeader *forwardedHeader, bool bread
 			} else {
 
 				/* copy object to outside copyspace */
-				forwardedAddress = copyOutside(evacuationRegion, forwardedHeader, NULL, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
+				MM_EvacuatorScanspace *insideFrame = NULL;
+				forwardedAddress = copyOutside(evacuationRegion, forwardedHeader, NULL, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy, &insideFrame);
+
+				/* outside copy may be redirected into stack if outside copyspace not possible */
+				if (NULL != insideFrame) {
+					/* push and scan copied object */
+					push(insideFrame);
+					scan();
+				}
 			}
 		}
 
@@ -611,7 +619,7 @@ MM_Evacuator::addWork(MM_EvacuatorWorkPacket *work)
 	}
 	omrthread_monitor_exit(_mutex);
 
-	_controller->notifyOfWork(this);
+	_controller->notifyOfWork(getVolumeOfWork());
 
 	_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
 }
@@ -657,6 +665,7 @@ MM_Evacuator::findWork()
 								/* this evacuator holds the controller mutex so does not take its own worklist mutex here */
 								MM_EvacuatorWorkPacket *free = _workList.add(donor->_workList.next());
 								if (NULL != free) {
+									/* donated packet merged into tail packet and can be recycled */
 									_freeList.add(free);
 								}
 								volume += nextVolume;
@@ -679,7 +688,7 @@ MM_Evacuator::findWork()
 					if (NULL != work) {
 
 						/* tell the world if donor has any distributable work left */
-						_controller->notifyOfWork(donor);
+						_controller->notifyOfWork(donor->getVolumeOfWork());
 
 #if defined(EVACUATOR_DEBUG)
 						if (_controller->_debugger.isDebugWork()) {
@@ -790,7 +799,7 @@ MM_Evacuator::getWork()
 	} else {
 
 		/* in case a stalled evacuator tried for this worklist while held by this evacuator above */
-		_controller->notifyOfWork(this);
+		_controller->notifyOfWork(getVolumeOfWork());
 	}
 
 	/* reset work packet release threshold to produce small packets until work volume increases */
@@ -953,13 +962,14 @@ MM_Evacuator::copy()
 				if (!forwardedHeader.isForwardedPointer()) {
 
 					/* slot object must be evacuated -- determine receiving region and before and after object size */
-					uintptr_t slotObjectSizeBeforeCopy = 0, slotObjectSizeAfterCopy = 0, hotFieldAlignmentDescriptor = 0;
 					const EvacuationRegion evacuationRegion = isNurseryAge(_objectModel->getPreservedAge(&forwardedHeader)) ? survivor : tenure;
 					const uintptr_t whiteSize = (NULL != _whiteStackFrame[evacuationRegion]) ? _whiteStackFrame[evacuationRegion]->getWhiteSize() : 0;
+					uintptr_t slotObjectSizeBeforeCopy = 0, slotObjectSizeAfterCopy = 0, hotFieldAlignmentDescriptor = 0;
 					_objectModel->calculateObjectDetailsForCopy(_env, &forwardedHeader, &slotObjectSizeBeforeCopy, &slotObjectSizeAfterCopy, &hotFieldAlignmentDescriptor);
 
-					/* copy stack overflow and large objects outside,  copy small objects inside the stack if sufficient whitespace remaining ... */
-					if ((stackFrame < _stackLimit) && (sizeLimit >= slotObjectSizeAfterCopy) && ((whiteSize >= slotObjectSizeAfterCopy) ||
+					/* copy flush overflow and large objects outside,  copy small objects inside the stack if sufficient whitespace remaining ... */
+					const bool tryInside = (0 == _largeObjectCounter[evacuationRegion]) && !_controller->shouldFlushWork(getVolumeOfWork());
+					if (tryInside && (sizeLimit >= slotObjectSizeAfterCopy) && ((whiteSize >= slotObjectSizeAfterCopy) ||
 						/* or current whitespace remainder is discardable ... */
 						((MM_EvacuatorBase::max_scanspace_remainder >= whiteSize) &&
 							/* and whitespace can be refreshed from evacuation region */
@@ -972,34 +982,39 @@ MM_Evacuator::copy()
 						forwardedAddress = copyForward(slotObject, whiteFrame, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
 
 						/* if object was copied into different frame a push may be necessary */
-						if (((uint8_t *)forwardedAddress == copyHead) && ((frameLimit < copyHead) || (whiteFrame != stackFrame))) {
+						if (((uint8_t *)forwardedAddress == copyHead) && (whiteFrame >= stackFrame)) {
 
-							if (whiteFrame <= stackFrame) {
+							if ((whiteFrame > stackFrame) || (frameLimit < copyHead)) {
 
-								/* if copied to frame below or to current frame past limit try to find frame above to pull it into */
+								/* if copied to frame above or to current frame past limit try to find frame above to pull it into */
 								MM_EvacuatorScanspace * const nextFrame = nextStackFrame(evacuationRegion, stackFrame + 1);
-
-								/* if no next frame just continue scanning in current frame, copied object will be scanned when stack pops to white frame  */
 								if (NULL != nextFrame) {
-									/* pull copied object and remaining whitespace from white frame into next frame */
-									nextFrame->pullTail(whiteFrame, copyHead);
-									/* next frame now holds copied object and whitespace for evacuator region */
-									_whiteStackFrame[evacuationRegion] = nextFrame;
+
+									/* if no next frame just continue scanning in current frame */
+									if (whiteFrame != nextFrame) {
+										/* pull copied object and remaining whitespace from white frame into next frame */
+										nextFrame->pullTail(whiteFrame, whiteFrame > stackFrame ? whiteFrame->getScanHead() : copyHead);
+										/* next frame now holds copied object and whitespace for evacuator region */
+										_whiteStackFrame[evacuationRegion] = nextFrame;
+									}
+
 									/* push to scan copied object */
 									push(nextFrame);
 								}
-
-							} else {
-
-								/* push to scan copied object */
-								push(whiteFrame);
 							}
 						}
 
 					} else {
 
 						/* copy to outside copyspace if not possible to copy inside stack */
-						forwardedAddress = copyOutside(evacuationRegion, &forwardedHeader, slotObject->readAddressFromSlot(), slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
+						MM_EvacuatorScanspace *insideFrame = NULL;
+						forwardedAddress = copyOutside(evacuationRegion, &forwardedHeader, slotObject->readAddressFromSlot(), slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy, &insideFrame);
+
+						/* outside copy may be redirected into stack if outside copyspace not possible */
+						if (_scanStackFrame < insideFrame) {
+							/* push to scan copied object */
+							push(insideFrame);
+						}
 					}
 
 				} else {
@@ -1018,9 +1033,9 @@ MM_Evacuator::copy()
 				stackFrame->updateRememberedState(true);
 			}
 
-			/* check for flush() or push() */
-			if (setStackLimit() || (_scanStackFrame != stackFrame)) {
-				/* return to continue in new frame (object scanner may have changed if stackFrame was flushed) */
+			/* check for push() */
+			if (_scanStackFrame != stackFrame) {
+				/* return to continue in new frame */
 				return;
 			}
 
@@ -1036,164 +1051,6 @@ MM_Evacuator::copy()
 
 	/* pop scan stack */
 	pop();
-}
-
-void
-MM_Evacuator::flush()
-{
-	const bool isTenureFrame = (tenure == getEvacuationRegion(_scanStackFrame->getBase()));
-	Debug_MM_true(evacuate > getEvacuationRegion(_scanStackFrame->getBase()));
-	debugStack("flush");
-
-	/* get the active object scanner without advancing slot */
-	GC_ObjectScanner *objectScanner = nextObjectScanner(_scanStackFrame, false);
-	while (NULL != objectScanner) {
-
-		/* flush slots from active object scanner */
-		GC_SlotObject *slotObject = objectScanner->getNextSlot();
-		while (NULL != slotObject) {
-
-			/* evacuate slot object to outside copyspace if it is in evacuate space */
-			omrobjectptr_t object = slotObject->readReferenceFromSlot();
-			if (isInEvacuate(object)) {
-
-				/* slot object must be evacuated */
-				MM_ForwardedHeader forwardedHeader(object);
-				if (!forwardedHeader.isForwardedPointer()) {
-
-					/* copy slot object to outside copyspace */
-					uintptr_t slotObjectSizeBeforeCopy = 0, slotObjectSizeAfterCopy = 0, hotFieldAlignmentDescriptor = 0;
-					EvacuationRegion evacuationRegion = isNurseryAge(_objectModel->getPreservedAge(&forwardedHeader)) ? survivor : tenure;
-					_objectModel->calculateObjectDetailsForCopy(_env, &forwardedHeader, &slotObjectSizeBeforeCopy, &slotObjectSizeAfterCopy, &hotFieldAlignmentDescriptor);
-
-					object = copyOutside(evacuationRegion, &forwardedHeader, slotObject->readAddressFromSlot(), slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
-
-				} else {
-
-					/* get the forwarding address */
-					object = forwardedHeader.getForwardedObject();
-				}
-
-				/* update slot with forwarding address */
-				slotObject->writeReferenceToSlot(object);
-			}
-
-			/* update remembered state of object being scanned */
-			if (isTenureFrame && (isInSurvivor(object) || isInEvacuate(object))) {
-				Debug_MM_true(!isInEvacuate(object) || isAbortedCycle());
-				_scanStackFrame->updateRememberedState(true);
-			}
-
-			/* if stall condition cleared resume copying inside top frame */
-			if (setStackLimit()) {
-				return;
-			}
-
-			/* get next slot from active object scanner */
-			slotObject = objectScanner->getNextSlot();
-		}
-
-		/* get scanner for next object at scan head */
-		objectScanner = nextObjectScanner(_scanStackFrame);
-	}
-
-	/* current stack frame has been completely scanned */
-	Debug_MM_true(_scanStackFrame->getScanHead() == _scanStackFrame->getCopyHead());
-}
-
-void
-MM_Evacuator::flushWork()
-{
-	MM_EvacuatorScanspace *topFrame = _scanStackFrame;
-	_scanStackFrame = _stackBottom;
-
-	/* flush frames from the bottom up to and excluding top frame until stall condition clears */
-	while (_scanStackFrame <= topFrame) {
-
-		/* flush current frame to end or until stall condition clears */
-		flush();
-
-		if ((_stackLimit < _stackCeiling) && (_scanStackFrame < topFrame)) {
-
-			/* flushed scan stack frame to end but stall condition remains so move up to next frame */
-			_scanStackFrame += 1;
-
-		} else {
-
-			/* stall condition cleared or top frame flushed so resume scanning top frame */
-			break;
-		}
-	}
-
-	_scanStackFrame = topFrame;
-}
-
-bool
-MM_Evacuator::setStackLimit()
-{
-	if (!isBreadthFirst()) {
-
-		if (_controller->shouldFlushWork()) {
-
-			/* when there >0 stalled evacuators force bread-first flushing to outside copyspaces until this evacuator fills work quota */
-			if (_stackLimit == _stackCeiling) {
-
-				/* recalculate work release threshold to reflect stalling context and worklist volume */
-				_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
-
-#if defined(EVACUATOR_DEBUG)
-				if (_controller->_debugger.isDebugWork()) {
-					OMRPORT_ACCESS_FROM_ENVIRONMENT(_env);
-					omrtty_printf("%5lu %2llu %2llu:     limit; release:%llx; vow:%llx; ", _controller->getEpoch()->gc, (uint64_t)_controller->getEpoch()->epoch,
-							(uint64_t)_workerIndex, (uint64_t)_workReleaseThreshold, getVolumeOfWork());
-					_controller->printEvacuatorBitmap(_env, "stalled", _controller->sampleStalledMap());
-					_controller->printEvacuatorBitmap(_env, "; resuming", _controller->sampleResumingMap());
-					omrtty_printf("\n");
-				}
-#endif /* defined(EVACUATOR_DEBUG) */
-
-				/* notify other evacautors if this one has work in its worklist */
-				if (0 < getVolumeOfWork()) {
-					_controller->notifyOfWork(this);
-				}
-
-				/* limit stack to force flushing until stall condition clears */
-				_stackLimit = _stackBottom;
-
-				/* flush frames from bottom of stack up to but not including current frame until stall condition clears */
-				flushWork();
-
-				return true;
-			}
-
-		} else if (_stackLimit < _stackCeiling) {
-
-			/* recalculate work release threshold to reflect worklist volume after stall condition clears */
-			_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
-
-#if defined(EVACUATOR_DEBUG)
-			if (_controller->_debugger.isDebugWork()) {
-				OMRPORT_ACCESS_FROM_ENVIRONMENT(_env);
-				omrtty_printf("%5lu %2llu %2llu:   unlimit; release:%llx; vow:%llx; ", _controller->getEpoch()->gc, (uint64_t)_controller->getEpoch()->epoch,
-						(uint64_t)_workerIndex, (uint64_t)_workReleaseThreshold, getVolumeOfWork());
-				_controller->printEvacuatorBitmap(_env, "stalled", _controller->sampleStalledMap());
-				_controller->printEvacuatorBitmap(_env, "; resuming", _controller->sampleResumingMap());
-				omrtty_printf("\n");
-			}
-#endif /* defined(EVACUATOR_DEBUG) */
-
-			if (_controller->hasFulfilledWorkQuota(getVolumeOfWork())) {
-
-				/* restore the stack limit to allow inside copying */
-				_stackLimit = _stackCeiling;
-
-				return true;
-			}
-		}
-	}
-
-	/* stack limit has not changed */
-	return false;
 }
 
 GC_ObjectScanner *
@@ -1302,7 +1159,7 @@ MM_Evacuator::reserveInsideCopyspace(const EvacuationRegion evacuationRegion, co
 		if (NULL == whitespace) {
 
 			/* try to allocate whitespace from the heap */
-			whitespace = _controller->getInsideFreespace(this, evacuationRegion, slotObjectSizeAfterCopy);
+			whitespace = _controller->getWhitespace(this, evacuationRegion, slotObjectSizeAfterCopy);
 			if (NULL == whitespace) {
 #if defined(EVACUATOR_DEBUG)
 				if (_controller->_debugger.isDebugAllocate()) {
@@ -1360,7 +1217,7 @@ MM_Evacuator::reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uin
 			whitespace = _whiteList[evacuationRegion].top(slotObjectSizeAfterCopy);
 			if (NULL == whitespace) {
 				/* try to allocate whitespace from the heap */
-				whitespace = _controller->getInsideFreespace(this, evacuationRegion, slotObjectSizeAfterCopy);
+				whitespace = _controller->getWhitespace(this, evacuationRegion, slotObjectSizeAfterCopy);
 			}
 
 			/* set whitespace into root stack frame, or not */
@@ -1389,20 +1246,25 @@ MM_Evacuator::reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uin
 }
 
 omrobjectptr_t
-MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy)
+MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy, MM_EvacuatorScanspace **stackFrame)
 {
-	/* reserve copy space */
-	const bool isSplitable = isSplitablePointerArray(forwardedHeader, slotObjectSizeAfterCopy);
-	MM_EvacuatorCopyspace *effectiveCopyspace = reserveOutsideCopyspace(&evacuationRegion, slotObjectSizeAfterCopy, isSplitable);
+	Debug_MM_true(!forwardedHeader->isForwardedPointer());
+	Debug_MM_true(isInEvacuate(forwardedHeader->getObject()));
 
 	/* failure to evacuate must return original address in evacuate space */
-	Debug_MM_true(!forwardedHeader->isForwardedPointer());
 	omrobjectptr_t forwardingAddress = forwardedHeader->getObject();
-	Debug_MM_true(isInEvacuate(forwardingAddress));
 
-	/* copy slot object to effective outside copyspace */
+	/* splittable arrays are always copied individually into large copyspace */
+	const bool isSplitable = isSplitablePointerArray(forwardedHeader, slotObjectSizeAfterCopy);
+
+	/* reserve copy space -- this may be obtained from inside whitespace if outside copyspace can't be refreshed */
+	MM_EvacuatorCopyspace * const effectiveCopyspace = reserveOutsideCopyspace(&evacuationRegion, slotObjectSizeAfterCopy, isSplitable);
+	*stackFrame = (NULL != effectiveCopyspace) && (effectiveCopyspace == (MM_EvacuatorCopyspace *)(_whiteStackFrame[evacuationRegion])) ? _whiteStackFrame[evacuationRegion] : NULL;
+
 	if (NULL != effectiveCopyspace) {
 		Debug_MM_true(slotObjectSizeAfterCopy <= effectiveCopyspace->getWhiteSize());
+
+		/* copy slot object to effective outside copyspace */
 		omrobjectptr_t copyHead = (omrobjectptr_t)effectiveCopyspace->getCopyHead();
 		forwardingAddress = copyForward(forwardedHeader, referringSlotAddress, effectiveCopyspace, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
 		if (copyHead == forwardingAddress) {
@@ -1415,19 +1277,23 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 
 					/* record 1-based array offsets to mark split pointer array work packets */
 					splitPointerArrayWork(copyHead);
-					/* prepare the large object copyspace for next use */
+
+					/* clear the large object copyspace for next use */
 					_largeCopyspace.reset();
 
 				} else {
 
 					/* set up a work packet containing a single large scalar or primitive/non-splitable pointer array object */
 					MM_EvacuatorWorkPacket *work = _freeList.next();
-					Debug_MM_true((slotObjectSizeAfterCopy == _largeCopyspace.getCopySize()) && (0 == _largeCopyspace.getWhiteSize()));
 					work->base = (omrobjectptr_t)_largeCopyspace.rebase(&work->length);
+					Debug_MM_true(slotObjectSizeAfterCopy == work->length);
 					addWork(work);
+
+					/* clear the large object copyspace for next use */
+					_whiteList[evacuationRegion].add(_largeCopyspace.trim());
 				}
 
-			} else if ((effectiveCopyspace != _scanStackFrame) && (effectiveCopyspace->getCopySize() >= _workReleaseThreshold)) {
+			} else if ((NULL == *stackFrame) && (effectiveCopyspace->getCopySize() >= _workReleaseThreshold)) {
 
 				/* pull work from head of effective copyspace into a work packet, leaving only trailing whitespace in copyspace */
 				MM_EvacuatorWorkPacket *work = _freeList.next();
@@ -1436,11 +1302,10 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 			}
 
 		} else if (effectiveCopyspace == &_largeCopyspace) {
+			Debug_MM_true(0 == _largeCopyspace.getCopySize());
 
 			/* object copied by other thread so clip reserved whitespace from large object copyspace onto the whitelist */
 			_whiteList[evacuationRegion].add(_largeCopyspace.trim());
-			/* prepare the large object copyspace for next use */
-			_largeCopyspace.reset();
 		}
 	}
 
@@ -1450,165 +1315,142 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 MM_EvacuatorCopyspace *
 MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, const bool isSplittable)
 {
+	/* fast return for common case */
+	const EvacuationRegion preferredRegion = *evacuationRegion;
+	if (!isSplittable && (slotObjectSizeAfterCopy <= _copyspace[preferredRegion].getWhiteSize())) {
+		if (1 < _largeObjectCounter[preferredRegion]) {
+			_largeObjectCounter[preferredRegion] -= 1;
+		}
+		return &_copyspace[preferredRegion];
+	}
+
+	/* failover to refresh copyspace or inject into stack whitespace or allocate solo object */
+
 	MM_EvacuatorCopyspace *copyspace = NULL;
 	MM_EvacuatorWhitespace *whitespace = NULL;
 
-	/* splittable object is a pointer array to be copied to large object copyspace and split into work packets */
-	const EvacuationRegion preferredRegion = *evacuationRegion;
-	if (!isSplittable) {
+	/* preference order of potential evacuation regions */
+	EvacuationRegion regions[] = { preferredRegion, otherOutsideRegion(preferredRegion) };
 
-		copyspace = &_copyspace[preferredRegion];
-		uintptr_t copyspaceRemainder = copyspace->getWhiteSize();
-		if (slotObjectSizeAfterCopy > copyspaceRemainder) {
-			/* use an outside copyspace unless required to large object space or object will not fit in copyspace whitespace remainder > max_copyspace_remainder */
-			copyspace = NULL;
+	/* inhibit copyspace refresh for very large or splittable object (pointer array to be split into work packets) */
+	bool useLargeCopyspace = isSplittable || (slotObjectSizeAfterCopy > _controller->_minimumCopyspaceSize);
+	if (!useLargeCopyspace) {
 
-			/* take whitespace from the preferred region whitelist if it is presenting a large space on top */
-			if (MM_EvacuatorBase::max_copyspace_remainder <= _whiteList[preferredRegion].top()) {
-				whitespace = _whiteList[preferredRegion].top(slotObjectSizeAfterCopy);
-			}
+		for (uintptr_t regionIndex = 0; regionIndex < 2; regionIndex += 1) {
+			*evacuationRegion = regions[regionIndex];
 
-			/* fail over to allocate from the preferred region */
-			if (NULL == whitespace) {
+			/* try tlh allocation */
+			const uintptr_t copyspaceRemainder = _copyspace[*evacuationRegion].getWhiteSize();
+			if (slotObjectSizeAfterCopy <= copyspaceRemainder) {
 
-				/* allow large whitespace remainder truncation of after failing to accommodate a series of larger objects */
-				bool allowTruncation = (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) && (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[preferredRegion]);
-				whitespace = _controller->getOutsideFreespace(this, preferredRegion, (allowTruncation ? 0 : copyspaceRemainder), slotObjectSizeAfterCopy);
-				if (NULL == whitespace) {
+				/* use outside copyspace for preferred region if object will fit */
+				return &_copyspace[*evacuationRegion];
 
-					/* try the other evacuation region (survivor/tenure) */
-					*evacuationRegion = otherOutsideRegion(preferredRegion);
-					copyspaceRemainder = _copyspace[*evacuationRegion].getWhiteSize();
-					if (slotObjectSizeAfterCopy > copyspaceRemainder) {
+			} else if ((MM_EvacuatorBase::max_copyspace_remainder >= copyspaceRemainder) || (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[*evacuationRegion])) {
 
-						/* try to allocate from other region whitelist if it is presenting a large chunk on top */
-						if (MM_EvacuatorBase::max_copyspace_remainder <= _whiteList[*evacuationRegion].top()) {
-							whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
-						}
-
-						/* fail over to allocate from the other region */
-						if (NULL == whitespace) {
-
-							/* allow large whitespace remainder truncation of after failing to accommodate a series of larger objects */
-							allowTruncation = (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) && (MM_EvacuatorBase::max_large_object_sequence <= _largeObjectCounter[*evacuationRegion]);
-							whitespace = _controller->getOutsideFreespace(this, *evacuationRegion, (allowTruncation ? 0 : copyspaceRemainder), slotObjectSizeAfterCopy);
-							if (NULL == whitespace) {
-
-								/* last chance -- fail over to steal whitespace from the stack */
-								if ((NULL != _whiteStackFrame[preferredRegion]) && (slotObjectSizeAfterCopy <= _whiteStackFrame[preferredRegion]->getWhiteSize())) {
-
-									whitespace = _whiteStackFrame[preferredRegion]->trim();
-									*evacuationRegion = preferredRegion;
-
-								} else if ((NULL != _whiteStackFrame[*evacuationRegion]) && (slotObjectSizeAfterCopy <= _whiteStackFrame[*evacuationRegion]->getWhiteSize())) {
-
-									whitespace = _whiteStackFrame[*evacuationRegion]->trim();
-
-								} else {
-
-									*evacuationRegion = unreachable;
-								}
-							}
-						}
-
-					} else {
-
-						/* the other outside region has enough whitespace to receive the object */
-						copyspace = &_copyspace[*evacuationRegion];
-					}
+				/* refresh whitespace for copyspace and truncate remainder to whitelist */
+				whitespace = _controller->getWhitespace(this, *evacuationRegion, slotObjectSizeAfterCopy);
+				if (NULL != whitespace) {
+					_largeObjectCounter[*evacuationRegion] = 0;
+					break;
 				}
 			}
+
+			if (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) {
+				_largeObjectCounter[*evacuationRegion] += 1;
+			}
+
+			/* try injecting into stack whitespace */
+			if ((NULL != _whiteStackFrame[*evacuationRegion]) && (slotObjectSizeAfterCopy <= _whiteStackFrame[*evacuationRegion]->getWhiteSize())) {
+				return _whiteStackFrame[*evacuationRegion];
+			}
 		}
 
-	} else {
+	}
+	Debug_MM_true(NULL == copyspace);
 
-		/* allocate exactly enough heap memory to contain the large object */
-		const uintptr_t copyspaceRemainder = MM_EvacuatorBase::max_copyspace_remainder;
-		whitespace = _controller->getOutsideFreespace(this, preferredRegion, copyspaceRemainder, slotObjectSizeAfterCopy);
-		if (NULL == whitespace) {
+	/* allocate for solo object copy */
+	if (NULL == whitespace){
 
-			const EvacuationRegion otherRegion = otherOutsideRegion(preferredRegion);
-			whitespace = _controller->getOutsideFreespace(this, otherRegion, copyspaceRemainder, slotObjectSizeAfterCopy);
-			*evacuationRegion = (NULL != whitespace) ? otherRegion : unreachable;
-
+		useLargeCopyspace = true;
+		for (uintptr_t regionIndex = survivor; (NULL == whitespace) && (regionIndex <= tenure); regionIndex += 1) {
+			*evacuationRegion = regions[regionIndex];
+			if (_controller->_minimumCopyspaceSize <= slotObjectSizeAfterCopy) {
+				whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
+			}
+			if (NULL == whitespace) {
+				whitespace = _controller->getObjectWhitespace(this, *evacuationRegion, slotObjectSizeAfterCopy);
+				if (NULL != whitespace) {
+					break;
+				}
+			} else {
+				break;
+			}
 		}
-		Debug_MM_true((NULL == whitespace) || (slotObjectSizeAfterCopy == whitespace->length()));
 	}
 
-	if (NULL == copyspace) {
+	/* at this point no whitespace to refresh copyspace means failure */
+	if (NULL != whitespace) {
+		Debug_MM_true(slotObjectSizeAfterCopy <= whitespace->length());
+		Debug_MM_true(*evacuationRegion == getEvacuationRegion(whitespace));
+		Debug_MM_true(!useLargeCopyspace || (slotObjectSizeAfterCopy >= MM_EvacuatorBase::max_copyspace_remainder));
 
-		if (NULL != whitespace) {
-			Debug_MM_true(slotObjectSizeAfterCopy <= whitespace->length());
-			Debug_MM_true(*evacuationRegion == getEvacuationRegion(whitespace));
+		/* pull whitespace from evacuation region into outside or large copyspace */
+		if (!useLargeCopyspace) {
 
-			/* pull whitespace from evacuation region into outside or large copyspace */
-			if (!isSplittable && (slotObjectSizeAfterCopy < whitespace->length())) {
+			/* select receiving outside copyspace to receive object with whitespace to spare */
+			copyspace = &_copyspace[*evacuationRegion];
 
-				/* select receiving outside copyspace to receive object with whitespace to spare */
-				_largeObjectCounter[*evacuationRegion] = 0;
-				copyspace = &_copyspace[*evacuationRegion];
-
-				/* distribute any existing work in copyspace */
-				if (0 < copyspace->getCopySize()) {
-					MM_EvacuatorWorkPacket *work = _freeList.next();
-					work->base = (omrobjectptr_t)copyspace->rebase(&work->length);
-					addWork(work);
-				}
-
-				/* trim whitespace from copyspace to whitelist */
-				_whiteList[*evacuationRegion].add(copyspace->trim());
-
-			} else {
-
-				/* select large copyspace as receiver -- whitespace size fits object shape exactly */
-				if (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) {
-					_largeObjectCounter[*evacuationRegion] += 1;
-				}
-				copyspace = &_largeCopyspace;
-
-				Debug_MM_true4(_env, (slotObjectSizeAfterCopy >= MM_EvacuatorBase::max_copyspace_remainder), "object should fit in outside %s copyspace tail: object=%llx; survivor-tail=%llx; tenure-tail=%llx\n",
-						((survivor == *evacuationRegion) ? "survivor" : "tenure"), slotObjectSizeAfterCopy, _copyspace[survivor].getWhiteSize(), _copyspace[tenure].getWhiteSize());
-				Debug_MM_true(slotObjectSizeAfterCopy == whitespace->length());
-				Debug_MM_true(0 == copyspace->getCopySize());
-				Debug_MM_true(0 == copyspace->getWhiteSize());
+			/* distribute any existing work in copyspace */
+			if (0 < copyspace->getCopySize()) {
+				MM_EvacuatorWorkPacket *work = _freeList.next();
+				work->base = (omrobjectptr_t)copyspace->rebase(&work->length);
+				addWork(work);
 			}
 
-			/* pull the reserved whitespace into the selected copyspace */
-			copyspace->setCopyspace((uint8_t*)whitespace, (uint8_t*)whitespace, whitespace->length(), whitespace->isLOA());
+			/* trim whitespace from copyspace to whitelist */
+			_whiteList[*evacuationRegion].add(copyspace->trim());
 
 		} else {
 
-			/* abort the evacuation and broadcast this to other evacuators through controller */
-			if (!setAbortedCycle()) {
-				/* do this only if this evacuator is first to set the abort condition */
-#if defined(EVACUATOR_DEBUG)
-				if (_controller->_debugger.isDebugEnd()) {
-					OMRPORT_ACCESS_FROM_ENVIRONMENT(_env);
-					omrtty_printf("%5lu %2llu %2llu:     abort; flags:%llx", _controller->getEpoch()->gc, (uint64_t)_controller->getEpoch()->epoch, (uint64_t)_workerIndex, (uint64_t)_controller->sampleEvacuatorFlags());
-					if (NULL != _scanStackFrame) {
-						omrtty_printf("; scanning:0x%llx", (uint64_t)_scanStackFrame->getScanHead());
-					}
-					omrtty_printf("\n");
-				}
-#endif /* defined(EVACUATOR_DEBUG) */
-			}
+			/* select large copyspace as receiver -- excess whitespace will be trimmed after copy is complete */
+			copyspace = &_largeCopyspace;
 
-			/* record every allocation failure after abort condition raised */
-			if (survivor == preferredRegion) {
-				_stats->_failedFlipCount += 1;
-				_stats->_failedFlipBytes += slotObjectSizeAfterCopy;
-			} else {
-				_stats->_failedTenureCount += 1;
-				_stats->_failedTenureBytes += slotObjectSizeAfterCopy;
-				_stats->_failedTenureLargest = OMR_MAX(slotObjectSizeAfterCopy, _stats->_failedTenureLargest);
-			}
+			Debug_MM_true(0 == copyspace->getCopySize());
+			Debug_MM_true(0 == copyspace->getWhiteSize());
 		}
+
+		/* pull the reserved whitespace into the selected copyspace */
+		copyspace->setCopyspace((uint8_t*)whitespace, (uint8_t*)whitespace, whitespace->length(), whitespace->isLOA());
 
 	} else {
 
-		if (0 < _largeObjectCounter[*evacuationRegion]) {
-			_largeObjectCounter[*evacuationRegion] -= 1;
+		/* abort the evacuation and broadcast this to other evacuators through controller */
+		if (!setAbortedCycle()) {
+			/* do this only if this evacuator is first to set the abort condition */
+#if defined(EVACUATOR_DEBUG)
+			if (_controller->_debugger.isDebugEnd()) {
+				OMRPORT_ACCESS_FROM_ENVIRONMENT(_env);
+				omrtty_printf("%5lu %2llu %2llu:     abort; flags:%llx", _controller->getEpoch()->gc, (uint64_t)_controller->getEpoch()->epoch, (uint64_t)_workerIndex, (uint64_t)_controller->sampleEvacuatorFlags());
+				if (NULL != _scanStackFrame) {
+					omrtty_printf("; scanning:0x%llx", (uint64_t)_scanStackFrame->getScanHead());
+				}
+				omrtty_printf("\n");
+			}
+#endif /* defined(EVACUATOR_DEBUG) */
 		}
+
+		/* record every allocation failure after abort condition raised */
+		if (survivor == regions[0]) {
+			_stats->_failedFlipCount += 1;
+			_stats->_failedFlipBytes += slotObjectSizeAfterCopy;
+		} else {
+			_stats->_failedTenureCount += 1;
+			_stats->_failedTenureBytes += slotObjectSizeAfterCopy;
+			_stats->_failedTenureLargest = OMR_MAX(slotObjectSizeAfterCopy, _stats->_failedTenureLargest);
+		}
+
+		*evacuationRegion = unreachable;
 	}
 
 	return copyspace;
@@ -1752,7 +1594,7 @@ MM_Evacuator::splitPointerArrayWork(omrobjectptr_t pointerArray)
 	omrthread_monitor_exit(_mutex);
 
 	/* tell the world about it */
-	_controller->notifyOfWork(this);
+	_controller->notifyOfWork(getVolumeOfWork());
 }
 
 bool

@@ -109,9 +109,7 @@ private:
 	void scanHeap();
 	bool scanClearable();
 	void scanComplete();
-	void flushWork();
 
-	MMINLINE bool setStackLimit();
 	MMINLINE MM_EvacuatorScanspace *reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uintptr_t slotObjectSizeAfterCopy);
 	MMINLINE MM_EvacuatorScanspace *reserveInsideCopyspace(const EvacuationRegion evacuationRegion, const uintptr_t whiteSize, const uintptr_t slotObjectSizeAfterCopy);
 	MMINLINE MM_EvacuatorScanspace *nextStackFrame(const EvacuationRegion evacuationRegion, MM_EvacuatorScanspace *frame);
@@ -121,11 +119,10 @@ private:
 	MMINLINE void push(MM_EvacuatorScanspace *const nextStackFrame);
 	MMINLINE void scan();
 	MMINLINE void copy();
-	MMINLINE void flush();
 	MMINLINE void pop();
 
 	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, const bool isSplittable);
-	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy);
+	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy, MM_EvacuatorScanspace **stackFrame);
 
 	MMINLINE omrobjectptr_t copyForward(MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, MM_EvacuatorCopyspace * const copyspace, const uintptr_t originalLength, const uintptr_t forwardedLength);
 	MMINLINE omrobjectptr_t copyForward(GC_SlotObject *slotObject, MM_EvacuatorCopyspace * const copyspace, const uintptr_t originalLength, const uintptr_t forwardedLength);
@@ -347,11 +344,6 @@ public:
 	 * @return true unless gc cycle is aborting
 	 */
 	bool evacuateHeap();
-
-	/**
-	 * Returns true if evacuator is scanning on stack
-	 */
-	MMINLINE bool isInHeapScan() { return !_completedScan; }
 
 	/**
 	 * Controller calls this to get the volume of work available on the evacator's work queue.

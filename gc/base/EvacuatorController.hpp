@@ -162,9 +162,6 @@ public:
  * Function members
  */
 private:
-	/* allocate at least minimumLength bytes of whitespace in specified region */
-	MM_EvacuatorWhitespace *allocateWhitespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t remainder, uintptr_t minimumLength, bool inside);
-
 	/* calculate a rough overestimate of the amount of matter that will be evacuated to survivor or tenure in current cycle */
 	uint64_t  calculateProjectedEvacuationBytes();
 
@@ -282,7 +279,7 @@ public:
 	 * @param pointer pointer to test
 	 * @return true if pointer is object aligned
 	 */
-	bool isObjectAligned(void *pointer) { return 0 == ((uintptr_t)pointer & (_objectAlignmentInBytes - 1)); }
+	MMINLINE bool isObjectAligned(void *pointer) { return 0 == ((uintptr_t)pointer & (_objectAlignmentInBytes - 1)); }
 
 	/**
 	 * Adjust to object size
@@ -290,7 +287,7 @@ public:
 	 * @param size to be adjusted
 	 * @return adjusted size
 	 */
-	uintptr_t alignToObjectSize(uintptr_t size) { return _extensions->objectModel.adjustSizeInBytes(size); }
+	MMINLINE uintptr_t alignToObjectSize(uintptr_t size) { return _extensions->objectModel.adjustSizeInBytes(size); }
 
 	/**
 	 * Controller delegates backout and remembered set to subclass
@@ -324,26 +321,26 @@ public:
 	 *
 	 * The flags are all cleared at the start of each gc cycle.
 	 */
-	bool isEvacuatorFlagSet(uintptr_t flag) { return (flag == (_evacuatorFlags & flag)); }
-	bool isAnyEvacuatorFlagSet(uintptr_t flags) { return (0 != (_evacuatorFlags & flags)); }
-	bool areAllEvacuatorFlagsSet(uintptr_t flags) { return (flags == (_evacuatorFlags & flags)); }
-	void resetEvacuatorFlags() { VM_AtomicSupport::set(&_evacuatorFlags, 0); }
+	MMINLINE bool isEvacuatorFlagSet(uintptr_t flag) { return (flag == (_evacuatorFlags & flag)); }
+	MMINLINE bool isAnyEvacuatorFlagSet(uintptr_t flags) { return (0 != (_evacuatorFlags & flags)); }
+	MMINLINE bool areAllEvacuatorFlagsSet(uintptr_t flags) { return (flags == (_evacuatorFlags & flags)); }
+	MMINLINE void resetEvacuatorFlags() { VM_AtomicSupport::set(&_evacuatorFlags, 0); }
 
 	/**
 	 * Get the number of GC threads dispatched for current gc cycle
 	 */
-	uintptr_t getEvacuatorThreadCount() { return _evacuatorCount; }
+	MMINLINE uintptr_t getEvacuatorThreadCount() { return _evacuatorCount; }
 
 	/* these methods return accurate results only when caller holds the controller or evacuator mutex */
-	bool isBoundEvacuator(uintptr_t evacuatorIndex) { return testEvacuatorBit(evacuatorIndex, _boundEvacuatorBitmap); }
-	bool isStalledEvacuator(uintptr_t evacuatorIndex) { return isBoundEvacuator(evacuatorIndex) && testEvacuatorBit(evacuatorIndex, _stalledEvacuatorBitmap); }
-	bool shouldFlushWork() { return (5 < _evacuatorCount) || ((5 * _stalledEvacuatorCount) >= _evacuatorCount); }
-	bool areAnyEvacuatorsStalled() { return (0 < _stalledEvacuatorCount); }
+	MMINLINE bool isBoundEvacuator(uintptr_t evacuatorIndex) { return testEvacuatorBit(evacuatorIndex, _boundEvacuatorBitmap); }
+	MMINLINE bool isStalledEvacuator(uintptr_t evacuatorIndex) { return isBoundEvacuator(evacuatorIndex) && testEvacuatorBit(evacuatorIndex, _stalledEvacuatorBitmap); }
+	MMINLINE bool shouldFlushWork(uint64_t volumeOfWork) { return ((5 * _stalledEvacuatorCount) >= _evacuatorCount) && (volumeOfWork <= (_minimumWorkQuanta * _minimumWorkspaceSize)); }
+	MMINLINE bool areAnyEvacuatorsStalled() { return (0 < _stalledEvacuatorCount); }
 
 	/**
 	 * Get the nearest neighboring bound evacuator, or wrap around and return identity if no other evacuators are bound
 	 */
-	MM_Evacuator *
+	MMINLINE MM_Evacuator *
 	getNextEvacuator(MM_Evacuator *evacuator)
 	{
 		/* skip evacuator to start enumeration */
@@ -365,16 +362,16 @@ public:
 	/**
 	 * Evacuators call controller to assume/release exclusive controller access when completing or aborting scan cycle or completing an epoch
 	 */
-	void acquireController() { omrthread_monitor_enter(_controllerMutex); }
+	MMINLINE void acquireController() { omrthread_monitor_enter(_controllerMutex); }
 
-	void releaseController() { omrthread_monitor_exit(_controllerMutex); }
+	MMINLINE void releaseController() { omrthread_monitor_exit(_controllerMutex); }
 
 	/**
 	 * Get global abort flag value. This is set if any evacuator raises an abort condition
 	 *
 	 * @return true if the evacuation has been aborted
 	 */
-	bool isAborting() { return isEvacuatorFlagSet(aborting); }
+	MMINLINE bool isAborting() { return isEvacuatorFlagSet(aborting); }
 
 	/**
 	 * Atomically test and set global abort flag to true. This is set if any evacuator raises an abort condition.
@@ -403,7 +400,7 @@ public:
 	 *
 	 * @return a pointer to the memory subspace
 	 */
-	MM_MemorySubSpace *getMemorySubspace(MM_Evacuator::EvacuationRegion region) { return _memorySubspace[region]; }
+	MMINLINE MM_MemorySubSpace *getMemorySubspace(MM_Evacuator::EvacuationRegion region) { return _memorySubspace[region]; }
 
 	/**
 	 * Evacuator periodically reports scanning/copying progress to controller. Period is determined by
@@ -435,18 +432,19 @@ public:
 	 * @param volumeOfWork the volume of work on the evacuator's worklist
 	 * @return true if evacuator's volume of work is greater than quota
 	 */
-	bool hasFulfilledWorkQuota(uint64_t volumeOfWork) { return ((uint64_t)_minimumWorkspaceSize * (uint64_t)_minimumWorkQuanta) <= volumeOfWork; }
+	MMINLINE bool hasFulfilledWorkQuota(uint64_t volumeOfWork) { return ((uint64_t)_minimumWorkspaceSize * (uint64_t)_minimumWorkQuanta) < volumeOfWork; }
 
 	/**
 	 * Evacuator will notify controller of work whenever it adds to its own worklist and in the presence
-	 * of other stalled evacuators. Controller will notify a stalled evacuator, if any are stalled.
+	 * of other stalled evacuators. Controller will notify a stalled evacuator if calling evacuator volume
+	 * of work fulfills quota.
 	 */
-	void
-	notifyOfWork(MM_Evacuator *worker)
+	MMINLINE void
+	notifyOfWork(uint64_t volumeOfWork)
 	{
-		if (areAnyEvacuatorsStalled() && (0 < worker->getVolumeOfWork())) {
+		if (areAnyEvacuatorsStalled() && hasFulfilledWorkQuota(volumeOfWork)) {
 			acquireController();
-			if (areAnyEvacuatorsStalled() && (0 < worker->getVolumeOfWork())) {
+			if (areAnyEvacuatorsStalled() && hasFulfilledWorkQuota(volumeOfWork)) {
 				omrthread_monitor_notify(_controllerMutex);
 			}
 			releaseController();
@@ -458,7 +456,7 @@ public:
 	 *
 	 * Caller must have acquired controller mutex before and release it after the call
 	 */
-	void waitForWork() { omrthread_monitor_wait(_controllerMutex); }
+	MMINLINE void waitForWork() { omrthread_monitor_wait(_controllerMutex); }
 
 	/**
 	 * Evacuator calls controller when complete and ready to synchronize with other completing evacuators. All
@@ -490,28 +488,27 @@ public:
 	 *
 	 * @return true if all material evacuated so far has been scanned
 	 */
-	bool hasCompletedScan() { return ((_copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure]) == _scannedBytes); }
+	MMINLINE bool hasCompletedScan() { return ((_copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure]) == _scannedBytes); }
 
 	/**
-	 * Evacuator calls this to get free space for inside (hierarchical) copying in specified destination memory space.
+	 * Evacuator calls this to get free space for refreshing stack scanspaces and outside copyspaces.
 	 *
 	 * @param worker the calling evacuator
 	 * @param region the region (survivor or tenure) to obtain free space from
-	 * @param length the (minimum) number of bytes of free space required
-	 * @return a pointer to space allocated, which may be larger that the requested length
-	 */
-	MM_EvacuatorWhitespace *getInsideFreespace(MM_Evacuator *worker, MM_Evacuator::EvacuationRegion region, uintptr_t length);
-
-	/**
-	 * Evacuator calls this to get free space for outside (breadth-first) copying in specified destination memory space.
-	 *
-	 * @param worker the calling evacuator
-	 * @param region the region (survivor or tenure) to obtain free space from
-	 * @param remainder the number of bytes of free space remaining in the worker's copyspace for the region
 	 * @param length the (minimum) number of bytes of free space required, a larger chunk may be allocated at controller discretion
-	 * @return a pointer to space allocated, which may be larger that the requested length
+	 * @return a pointer to space allocated, which may be larger that the requested length, or NULL
 	 */
-	MM_EvacuatorWhitespace *getOutsideFreespace(MM_Evacuator *worker, MM_Evacuator::EvacuationRegion region, uintptr_t remainder, uintptr_t length);
+	MM_EvacuatorWhitespace *getWhitespace(MM_Evacuator *worker, MM_Evacuator::EvacuationRegion region, uintptr_t length);
+
+	/**
+	 * Evacuator calls this to get free space for solo objects.
+	 *
+	 * @param worker the calling evacuator
+	 * @param region the region (survivor or tenure) to obtain free space from
+	 * @param length the (exact) number of bytes of free space required
+	 * @return a pointer to space allocated, which will be the requested length, or NULL
+	 */
+	MM_EvacuatorWhitespace *getObjectWhitespace(MM_Evacuator *worker, MM_Evacuator::EvacuationRegion region, uintptr_t length);
 
 	/* Get metrics from the most recently completed epoch in the current gc cycle */
 	MM_EvacuatorHistory::Epoch *getEpoch() { return _history.epoch(); }

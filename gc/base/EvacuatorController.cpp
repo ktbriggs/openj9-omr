@@ -540,7 +540,7 @@ MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, 
 	/* limit survivor allocations during root/remembered/clearable scans and during tail end of heap scan */
 	if (MM_Evacuator::survivor == region) {
 		uint64_t aggregateEvacuatedBytes = _copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure];
-		if (!evacuator->isInHeapScan() || ((4 * aggregateEvacuatedBytes) > (3 * calculateProjectedEvacuationBytes()))) {
+		if ((4 * aggregateEvacuatedBytes) > (3 * calculateProjectedEvacuationBytes())) {
 
 			/* scale down by aggregate evacuator bandwidth and evacuator volume of work */
 			uint64_t evacuatorVolumeOfWork = evacuator->getVolumeOfWork();
@@ -573,47 +573,18 @@ MM_EvacuatorController::calculateOptimalWorkPacketSize(uint64_t evacuatorVolumeO
 }
 
 MM_EvacuatorWhitespace *
-MM_EvacuatorController::getInsideFreespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t length)
+MM_EvacuatorController::getWhitespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t length)
 {
-	MM_EvacuatorWhitespace *freespace = NULL;
-	if (!isAborting()) {
-		freespace = allocateWhitespace(evacuator, region, 0, length, true);
-	}
-	return freespace;
-}
-
-MM_EvacuatorWhitespace *
-MM_EvacuatorController::getOutsideFreespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t remainder, uintptr_t length)
-{
-	MM_EvacuatorWhitespace *freespace = NULL;
-	if (!isAborting()) {
-		freespace = allocateWhitespace(evacuator, region, remainder, length, false);
-	}
-	return freespace;
-}
-
-MM_EvacuatorWhitespace *
-MM_EvacuatorController::allocateWhitespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t remainder, uintptr_t minimumLength, bool inside)
-{
-	Debug_MM_true(MM_Evacuator::evacuate > region);
-	Debug_MM_true(isObjectAligned((void*)minimumLength));
-	Debug_MM_true(remainder < minimumLength);
-
-	if (minimumLength >= _objectAllocationCeiling[region]) {
-		return NULL;
-	}
-
-	MM_EnvironmentBase *env = evacuator->getEnvironment();
 	MM_EvacuatorWhitespace *whitespace = NULL;
-	uintptr_t optimalSize = 0;
+	MM_EnvironmentBase *env = evacuator->getEnvironment();
 
 	/* try to allocate a tlh unless object won't fit in outside copyspace remainder and remainder is still too big to whitelist */
-	uintptr_t maximumLength = calculateOptimalWhitespaceSize(evacuator, region);
-	if ((minimumLength <= maximumLength) && (inside || (remainder < MM_EvacuatorBase::max_copyspace_remainder))) {
+	uintptr_t optimalSize =  calculateOptimalWhitespaceSize(evacuator, region);
+	uintptr_t maximumLength = optimalSize;
+	if (length <= maximumLength) {
 
-		/* try to allocate tlh in region to contain at least minimumLength bytes */
-		optimalSize =  maximumLength;
-		uintptr_t limitSize = OMR_MAX(allocation_page_size, minimumLength);
+		/* try to allocate tlh in region to contain at least length bytes */
+		uintptr_t limitSize = OMR_MAX(_minimumCopyspaceSize, length);
 		while ((NULL == whitespace) && (optimalSize >= limitSize)) {
 
 			void *addrBase = NULL, *addrTop = NULL;
@@ -646,63 +617,64 @@ MM_EvacuatorController::allocateWhitespace(MM_Evacuator *evacuator, MM_Evacuator
 				optimalSize = _copyspaceAllocationCeiling[region];
 			}
 		}
+
 		Debug_MM_true4(evacuator->getEnvironment(), (NULL == whitespace) || (MM_EvacuatorBase::max_copyspace_remainder <= whitespace->length()),
 				"%s tlh whitespace should not be less minimum tlh size: requested=%llx; whitespace=%llx; limit=%llx\n",
-				((MM_Evacuator::survivor == region) ? "survivor" : "tenure"), minimumLength, whitespace->length(), _copyspaceAllocationCeiling[region]);
+				((MM_Evacuator::survivor == region) ? "survivor" : "tenure"), length, whitespace->length(), _copyspaceAllocationCeiling[region]);
 
 		/* hand off any unused tlh allocation to evacuator to reuse later */
-		if ((NULL != whitespace) && (whitespace->length() < minimumLength)) {
+		if ((NULL != whitespace) && (whitespace->length() < length)) {
 			evacuator->reserveWhitespace(whitespace);
 			whitespace = NULL;
 		}
 	}
 
-	/* on inside allocation failure stack receives no whitespace so will unwind flushing this and subsequent objects to outside copyspaces */
-	if (!inside && (NULL == whitespace)) {
-		Debug_MM_true3(evacuator->getEnvironment(), (minimumLength > MM_EvacuatorBase::max_copyspace_remainder) || (_copyspaceAllocationCeiling[region] < allocation_page_size),
-				"%s tlh whitespace should not be less than minimum tlh size unless under limit: requested=%llx; limit=%llx\n",
-				((MM_Evacuator::survivor == region) ? "survivor" : "tenure"), minimumLength, _copyspaceAllocationCeiling[region]);
-
-		/* allocate minimal (this object's exact) size */
-		optimalSize = minimumLength;
-		MM_AllocateDescription allocateDescription(optimalSize, 0, false, true);
-		allocateDescription.setCollectorAllocateExpandOnFailure(MM_Evacuator::tenure == region);
-		void *allocation = getMemorySubspace(region)->collectorAllocate(env, this, &allocateDescription);
-		if (NULL != allocation) {
-
-			bool isLOA = (MM_Evacuator::tenure == region) && allocateDescription.isLOAAllocation();
-			Debug_MM_true(isObjectAligned(allocation));
-			whitespace = MM_EvacuatorWhitespace::whitespace(allocation, optimalSize, isLOA);
-
-			if (MM_Evacuator::survivor == region) {
-				env->_scavengerStats._semiSpaceAllocationCountLarge += 1;
-			} else {
-				env->_scavengerStats._tenureSpaceAllocationCountLarge += 1;
-			}
-			env->_scavengerStats.countCopyCacheSize(optimalSize, _maximumCopyspaceSize);
-
-		} else {
-
-			/* lower the object allocation ceiling for the region */
-			while (minimumLength < _objectAllocationCeiling[region]) {
-				VM_AtomicSupport::lockCompareExchange(&_objectAllocationCeiling[region], _objectAllocationCeiling[region], minimumLength);
-			}
-		}
-
-	}
-
 #if defined(EVACUATOR_DEBUG)
 	if ((NULL != whitespace) && _debugger.isDebugAllocate()) {
-		OMRPORT_ACCESS_FROM_ENVIRONMENT(evacuator->getEnvironment());
-		omrtty_printf("%5lu %2llu %2llu:%c allocate; %s; %llx %llx %llx %llx %llx %llx %llx %llx\n",
-				getEpoch()->gc, (uint64_t)getEpoch()->epoch, (uint64_t)evacuator->getWorkerIndex(), (inside ? 'I' : 'O'),
-				((MM_Evacuator::survivor == region) ? "survivor" : "tenure"), (uint64_t)whitespace, (uint64_t)((NULL != whitespace) ? whitespace->length() : 0),
-				(uint64_t)minimumLength, (uint64_t)remainder, (uint64_t)maximumLength, (uint64_t)optimalSize, (uint64_t)_copyspaceAllocationCeiling[region], (uint64_t)_objectAllocationCeiling[region]);
+		OMRPORT_ACCESS_FROM_ENVIRONMENT(env);
+		omrtty_printf("%5lu %2llu %2llu:  allocate; %s; %llx %llx %llx %llx %llx %llx %llx\n",
+				getEpoch()->gc, (uint64_t)getEpoch()->epoch, (uint64_t)evacuator->getWorkerIndex(), ((MM_Evacuator::survivor == region) ? "survivor" : "tenure"),
+				(uint64_t)whitespace, (uint64_t)((NULL != whitespace) ? whitespace->length() : 0), (uint64_t)length, (uint64_t)maximumLength, (uint64_t)optimalSize,
+				(uint64_t)_copyspaceAllocationCeiling[region], (uint64_t)_objectAllocationCeiling[region]);
 	}
 	if ((NULL != whitespace) && _debugger.isDebugPoisonDiscard()) {
 		MM_EvacuatorWhitespace::poison(whitespace);
 	}
 #endif /* defined(EVACUATOR_DEBUG) */
+
+	return whitespace;
+}
+
+MM_EvacuatorWhitespace *
+MM_EvacuatorController::getObjectWhitespace(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region, uintptr_t length)
+{
+	MM_EvacuatorWhitespace *whitespace = NULL;
+	MM_EnvironmentBase *env = evacuator->getEnvironment();
+
+	/* allocate minimal (this object's exact) size */
+	MM_AllocateDescription allocateDescription(length, 0, false, true);
+	allocateDescription.setCollectorAllocateExpandOnFailure(MM_Evacuator::tenure == region);
+	void *allocation = getMemorySubspace(region)->collectorAllocate(env, this, &allocateDescription);
+	if (NULL != allocation) {
+		Debug_MM_true(isObjectAligned(allocation));
+
+		bool isLOA = (MM_Evacuator::tenure == region) && allocateDescription.isLOAAllocation();
+		whitespace = MM_EvacuatorWhitespace::whitespace(allocation, length, isLOA);
+
+		env->_scavengerStats.countCopyCacheSize(length, _maximumCopyspaceSize);
+		if (MM_Evacuator::survivor == region) {
+			env->_scavengerStats._semiSpaceAllocationCountLarge += 1;
+		} else {
+			env->_scavengerStats._tenureSpaceAllocationCountLarge += 1;
+		}
+
+	} else {
+
+		/* lower the object allocation ceiling for the region */
+		while (length < _objectAllocationCeiling[region]) {
+			VM_AtomicSupport::lockCompareExchange(&_objectAllocationCeiling[region], _objectAllocationCeiling[region], length);
+		}
+	}
 
 	return whitespace;
 }

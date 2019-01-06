@@ -2438,9 +2438,9 @@ MM_Scavenger::shouldRememberObject(MM_EnvironmentStandard *env, omrobjectptr_t o
  * @return true if object should be remembered at the end of scanning.
  */
 MMINLINE bool
-MM_Scavenger::scavengeRememberedObject(MM_EnvironmentStandard *env, omrobjectptr_t objectPtr, omrobjectptr_t *rememberedSetSlot)
+MM_Scavenger::scavengeRememberedObject(MM_EnvironmentStandard *env, omrobjectptr_t objectPtr)
 {
-	bool shouldBeBemembered = scavengeObjectSlots(env, NULL, objectPtr, GC_ObjectScanner::scanRoots, rememberedSetSlot);
+	bool shouldBeBemembered = scavengeObjectSlots(env, NULL, objectPtr, GC_ObjectScanner::scanRoots, NULL);
 	if (_extensions->objectModel.hasIndirectObjectReferents((CLI_THREAD_TYPE*)env->getLanguageVMThread(), objectPtr)) {
 		shouldBeBemembered |= _cli->scavenger_scavengeIndirectObjectSlots(env, objectPtr);
 	}
@@ -2477,7 +2477,7 @@ MM_Scavenger::scavengeRememberedSetOverflow(MM_EnvironmentStandard *env)
 		omrobjectptr_t objectPtr = NULL;
 		while (NULL != (objectPtr = rememberedSetOverflow.nextObject())) {
 			if (!_extensions->isEvacuatorEnabled()) {
-				scavengeRememberedObject(env, objectPtr, NULL);
+				scavengeRememberedObject(env, objectPtr);
 			} else {
 				env->getEvacuator()->evacuateRememberedObject(objectPtr);
 			}
@@ -2778,7 +2778,18 @@ MM_Scavenger::scavengeRememberedSetList(MM_EnvironmentStandard *env)
 				*slotPtr = (omrobjectptr_t)((uintptr_t)*slotPtr | DEFERRED_RS_REMOVE_FLAG);
 
 				/* Evacuator does not split arrays when evacuating slots from remembered pointer arrays so the ersult is immediate */
-				bool shouldBeRemembered = _extensions->isEvacuatorEnabled() ? env->getEvacuator()->evacuateRememberedObject(objectPtr) : scavengeRememberedObject(env, objectPtr, slotPtr);
+				bool shouldBeRemembered = false;
+				if (_extensions->isEvacuatorEnabled()) {
+					/* evacuator does not split remembered arrays -- these are generally less dense and are scanned early in gc */
+					shouldBeRemembered = env->getEvacuator()->evacuateRememberedObject(objectPtr);
+				} else {
+					/* scavenger splits remembered arrays so rememered state not determined here so pass remembered set slot pointer */
+					shouldBeRemembered = scavengeObjectSlots(env, NULL, objectPtr, GC_ObjectScanner::scanRoots, slotPtr);
+					/* split segments scanned later will clear deferred removal flag from remembered set slot */
+					if (_extensions->objectModel.hasIndirectObjectReferents((CLI_THREAD_TYPE*)env->getLanguageVMThread(), objectPtr)) {
+						shouldBeRemembered |= _cli->scavenger_scavengeIndirectObjectSlots(env, objectPtr);
+					}
+				}
 				/* Update remembered state for this tenured object -- if still remembered we can clear removal flag here */
 				if (shouldBeRemembered || isRememberedThreadReference(env, objectPtr)) {
 					/* We want to retain this object in the remembered set so clear the flag for removal. */
@@ -3958,7 +3969,8 @@ MM_Scavenger::masterThreadGarbageCollect(MM_EnvironmentBase *envBase, MM_Allocat
 					for (MM_EvacuatorHistory::Epoch *epoch = _history.epoch(0); epoch <= _history.epoch(); epoch += 1) {
 						omrtty_printf("%5llu %2llu  0:     epoch; %llx %llx %llx %llx %llx %llu %llu %llu\n", (uint64_t)epoch->gc, (uint64_t)epoch->epoch,
 								epoch->survivorCopied, epoch->tenureCopied,	epoch->scanned, (uint64_t)epoch->survivorAllocationCeiling, (uint64_t)epoch->tenureAllocationCeiling,
-								((epoch->survivorCopied + epoch->tenureCopied) - epoch->scanned), epoch->duration, (uint64_t)epoch->stalled);
+								(((epoch->survivorCopied + epoch->tenureCopied) > epoch->scanned) ? ((epoch->survivorCopied + epoch->tenureCopied) - epoch->scanned) : 0),
+								epoch->duration, (uint64_t)epoch->stalled);
 					}
 				}
 #endif /* defined(EVACUATOR_DEBUG) */
@@ -5175,7 +5187,7 @@ MM_Scavenger::masterThreadConcurrentCollect(MM_EnvironmentBase *env)
 		if (_shouldYield) {
 			if (NULL == _extensions->gcExclusiveAccessThreadId) {
 				/* We terminated concurrent cycle due to a external request. We will not move to 'complete' phase,
-				 * but stay in concurrent scan phase and try to resume work after the external party is done 
+				 * but stay in concurrent scan phase and try to resume work after the external party is done
 				 * (when we are able to regain VM access)
 				 */
 				getConcurrentPhaseStats()->_terminationRequestType = MM_ConcurrentPhaseStatsBase::terminationRequest_External;

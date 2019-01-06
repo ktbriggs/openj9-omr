@@ -245,7 +245,7 @@ public:
 	 * Pull work from a scanspace from point of last copy along with remaining whitespace.
 	 *
 	 * @param fromspace the source copyspace
-	 * @param maxObjectSize length in bytes of maximal small object
+	 * @param base points to head of tail to pull
 	 */
 	void
 	pullTail(MM_EvacuatorScanspace *fromspace, uint8_t *base)
