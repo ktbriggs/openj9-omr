@@ -968,11 +968,11 @@ MM_Evacuator::copy()
 					_objectModel->calculateObjectDetailsForCopy(_env, &forwardedHeader, &slotObjectSizeBeforeCopy, &slotObjectSizeAfterCopy, &hotFieldAlignmentDescriptor);
 
 					/* copy flush overflow and large objects outside,  copy small objects inside the stack if sufficient whitespace remaining ... */
-					const bool tryInside = (0 == _largeObjectCounter[evacuationRegion]) && !_controller->shouldFlushWork(getVolumeOfWork());
-					if (tryInside && (sizeLimit >= slotObjectSizeAfterCopy) && ((whiteSize >= slotObjectSizeAfterCopy) ||
-						/* or current whitespace remainder is discardable ... */
+					const bool tryInside = (sizeLimit >= slotObjectSizeAfterCopy) && (0 == _largeObjectCounter[evacuationRegion]) && !_controller->shouldFlushWork(getVolumeOfWork());
+					if (tryInside && ((whiteSize >= slotObjectSizeAfterCopy) ||
+						/* ... or current whitespace remainder is discardable ... */
 						((MM_EvacuatorBase::max_scanspace_remainder >= whiteSize) &&
-							/* and whitespace can be refreshed from evacuation region */
+							/* ... and whitespace can be refreshed from evacuation region */
 							(NULL != reserveInsideCopyspace(evacuationRegion, whiteSize, slotObjectSizeAfterCopy))))
 					) {
 
@@ -1371,22 +1371,19 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 
 	/* allocate for solo object copy */
 	if (NULL == whitespace){
+		uintptr_t regionIndex = 0;
 
-		useLargeCopyspace = true;
-		for (uintptr_t regionIndex = survivor; (NULL == whitespace) && (regionIndex <= tenure); regionIndex += 1) {
+		do {
 			*evacuationRegion = regions[regionIndex];
-			if (_controller->_minimumCopyspaceSize <= slotObjectSizeAfterCopy) {
-				whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
-			}
+			whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
 			if (NULL == whitespace) {
 				whitespace = _controller->getObjectWhitespace(this, *evacuationRegion, slotObjectSizeAfterCopy);
-				if (NULL != whitespace) {
-					break;
-				}
-			} else {
-				break;
 			}
+			regionIndex += 1;
 		}
+		while ((NULL == whitespace) && (regionIndex < 2));
+
+		useLargeCopyspace = true;
 	}
 
 	/* at this point no whitespace to refresh copyspace means failure */

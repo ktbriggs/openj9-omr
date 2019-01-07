@@ -334,7 +334,7 @@ public:
 	/* these methods return accurate results only when caller holds the controller or evacuator mutex */
 	MMINLINE bool isBoundEvacuator(uintptr_t evacuatorIndex) { return testEvacuatorBit(evacuatorIndex, _boundEvacuatorBitmap); }
 	MMINLINE bool isStalledEvacuator(uintptr_t evacuatorIndex) { return isBoundEvacuator(evacuatorIndex) && testEvacuatorBit(evacuatorIndex, _stalledEvacuatorBitmap); }
-	MMINLINE bool shouldFlushWork(uint64_t volumeOfWork) { return ((5 * _stalledEvacuatorCount) >= _evacuatorCount) && (volumeOfWork <= (_minimumWorkQuanta * _minimumWorkspaceSize)); }
+	MMINLINE bool shouldFlushWork(uint64_t volumeOfWork) { return (0 < _stalledEvacuatorCount) && (volumeOfWork <= (_minimumWorkQuanta * _minimumWorkspaceSize)); }
 	MMINLINE bool areAnyEvacuatorsStalled() { return (0 < _stalledEvacuatorCount); }
 
 	/**
