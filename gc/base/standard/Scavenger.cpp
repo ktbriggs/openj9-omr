@@ -1974,6 +1974,10 @@ MM_Scavenger::getNextScanCache(MM_EnvironmentStandard *env)
 			}
 		}
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		uint64_t waitEndTime, waitStartTime;
+		waitStartTime = omrtime_hires_clock();
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 		omrthread_monitor_enter(_scanCacheMonitor);
 		_waitingCount += 1;
 
@@ -1987,19 +1991,7 @@ MM_Scavenger::getNextScanCache(MM_EnvironmentStandard *env)
 			} else {
 				while((0 == _cachedEntryCount) && (doneIndex == _doneIndex) && !shouldAbortScanLoop(env)) {
 					flushBuffersForGetNextScanCache(env);
-#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-					uint64_t waitEndTime, waitStartTime;
-					waitStartTime = omrtime_hires_clock();
-#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 					omrthread_monitor_wait(_scanCacheMonitor);
-#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
-					waitEndTime = omrtime_hires_clock();
-					if (doneIndex != _doneIndex) {
-						env->_scavengerStats.addToCompleteStallTime(waitStartTime, waitEndTime);
-					} else {
-						env->_scavengerStats.addToWorkStallTime(waitStartTime, waitEndTime);
-					}
-#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 				}
 			}
 		}
@@ -2011,6 +2003,14 @@ MM_Scavenger::getNextScanCache(MM_EnvironmentStandard *env)
 		}
 
 		omrthread_monitor_exit(_scanCacheMonitor);
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS)
+		waitEndTime = omrtime_hires_clock();
+		if (doneIndex != _doneIndex) {
+			env->_scavengerStats.addToCompleteStallTime(waitStartTime, waitEndTime);
+		} else {
+			env->_scavengerStats.addToWorkStallTime(waitStartTime, waitEndTime);
+		}
+#endif /* J9MODRON_TGC_PARALLEL_STATISTICS */
 	}
 
 	return cache;

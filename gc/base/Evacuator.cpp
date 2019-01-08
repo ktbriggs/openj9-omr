@@ -743,16 +743,17 @@ MM_Evacuator::getWork()
 		/* outside copyspaces must be cleared before engaging the controller to find other work */
 		if (NULL == work) {
 
-			/* prioritize tenure work */
+			/* prioritize tenure work and return without notifying other threads */
 			if (0 < _copyspace[tenure].getCopySize()) {
 				work = _freeList.next();
 				work->base = (omrobjectptr_t)_copyspace[tenure].rebase(&work->length);
+				return work;
 			} else if (0 < _copyspace[survivor].getCopySize()) {
 				work = _freeList.next();
 				work->base = (omrobjectptr_t)_copyspace[survivor].rebase(&work->length);
+				return work;
 			}
 
-			Debug_MM_true(0 == _largeCopyspace.getCopySize());
 		}
 	}
 
@@ -764,13 +765,13 @@ MM_Evacuator::getWork()
 		}
 		flushForWaitState();
 
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+		uint64_t waitStartTime = startWaitTimer();
+#endif /* defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 		_controller->acquireController();
 
 		work = findWork();
 		if (NULL == work) {
-#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
-			uint64_t waitStartTime = startWaitTimer();
-#endif /* defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
 			/* controller will release evacuator from stall when work is received or all other evacuators have stalled to complete or abort scan */
 			while (_controller->isWaitingToCompleteStall(this, work)) {
@@ -782,12 +783,12 @@ MM_Evacuator::getWork()
 			/* continue scanning received work or complete or abort scan */
 			_controller->continueAfterStall(this, work);
 
-#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
-			endWaitTimer(waitStartTime, work);
-#endif /* defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 		}
 
 		_controller->releaseController();
+#if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+		endWaitTimer(waitStartTime, work);
+#endif /* defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
 #if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
 		if (NULL != work) {
@@ -796,14 +797,16 @@ MM_Evacuator::getWork()
 		}
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
-	} else {
-
-		/* in case a stalled evacuator tried for this worklist while held by this evacuator above */
-		_controller->notifyOfWork(getVolumeOfWork());
 	}
 
-	/* reset work packet release threshold to produce small packets until work volume increases */
-	_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
+	if (NULL != work) {
+
+		/* reset work packet release threshold to produce small packets until work volume increases */
+		_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
+
+		/* in case of other stalled evacuators */
+		_controller->notifyOfWork(getVolumeOfWork());
+	}
 
 	/* if no work at this point heap scan completes (or aborts) */
 	return work;
@@ -1355,10 +1358,7 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 					break;
 				}
 			}
-
-			if (_controller->_minimumCopyspaceSize > slotObjectSizeAfterCopy) {
-				_largeObjectCounter[*evacuationRegion] += 1;
-			}
+			_largeObjectCounter[*evacuationRegion] += 1;
 
 			/* try injecting into stack whitespace */
 			if ((NULL != _whiteStackFrame[*evacuationRegion]) && (slotObjectSizeAfterCopy <= _whiteStackFrame[*evacuationRegion]->getWhiteSize())) {
@@ -1371,8 +1371,8 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 
 	/* allocate for solo object copy */
 	if (NULL == whitespace){
-		uintptr_t regionIndex = 0;
 
+		uintptr_t regionIndex = 0;
 		do {
 			*evacuationRegion = regions[regionIndex];
 			whitespace = _whiteList[*evacuationRegion].top(slotObjectSizeAfterCopy);
@@ -1382,7 +1382,6 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 			regionIndex += 1;
 		}
 		while ((NULL == whitespace) && (regionIndex < 2));
-
 		useLargeCopyspace = true;
 	}
 
