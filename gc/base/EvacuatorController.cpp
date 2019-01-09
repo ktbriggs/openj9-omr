@@ -522,13 +522,7 @@ MM_EvacuatorController::reportProgress(MM_Evacuator *worker,  uint64_t *copied, 
 uint64_t
 MM_EvacuatorController::calculateProjectedEvacuationBytes()
 {
-	if (0 < _finalEvacuatedBytes) {
-		/* inflate evacuated volume from most recent gc by 1.25 */
-		return (5 * _finalEvacuatedBytes) >> 2;
-	} else {
-		/* for first gc cycle deflate projected survivor volume by 0.75 */
-		return (3 * (_heapLayout[MM_Evacuator::survivor][1] - _heapLayout[MM_Evacuator::survivor][0])) >> 2;
-	}
+	return (_heapLayout[MM_Evacuator::survivor][1] - _heapLayout[MM_Evacuator::survivor][0]);
 }
 
 uintptr_t
@@ -539,8 +533,7 @@ MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, 
 
 	/* limit survivor allocations during root/remembered/clearable scans and during tail end of heap scan */
 	if (MM_Evacuator::survivor == region) {
-		uint64_t aggregateEvacuatedBytes = _copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure];
-		if ((4 * aggregateEvacuatedBytes) > (3 * calculateProjectedEvacuationBytes())) {
+		if ((10 * _copiedBytes[MM_Evacuator::survivor]) > (9 * calculateProjectedEvacuationBytes())) {
 
 			/* scale down by aggregate evacuator bandwidth and evacuator volume of work */
 			uint64_t evacuatorVolumeOfWork = evacuator->getVolumeOfWork();
@@ -561,7 +554,7 @@ MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, 
 uintptr_t
 MM_EvacuatorController::calculateOptimalWorkPacketSize(uint64_t evacuatorVolumeOfWork)
 {
-	uintptr_t worksize = 0;
+	uintptr_t worksize = _minimumWorkspaceSize;
 
 	/* allow worklist volume to double if no other evacuators are stalled*/
 	if (0 == _stalledEvacuatorCount) {

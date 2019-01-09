@@ -174,11 +174,10 @@ MM_Evacuator::unbindWorkerThread(MM_EnvironmentStandard *env)
 {
 	omrthread_monitor_enter(_mutex);
 
+	Debug_MM_true(!isAbortedCycle() || (0 == getVolumeOfWork()));
+
 	/* flush to freelist any abandoned work from the worklist  */
 	_workList.flush(&_freeList);
-
-	/* reset the freelist to free any underflow chunks allocated from system memory */
-	_freeList.reset();
 
 	/* merge GC stats */
 	_controller->mergeThreadGCStats(_env);
@@ -212,7 +211,7 @@ MM_Evacuator::evacuateRootObject(MM_ForwardedHeader *forwardedHeader, bool bread
 			EvacuationRegion const evacuationRegion = isNurseryAge(_objectModel->getPreservedAge(forwardedHeader)) ? survivor : tenure;
 
 			/* can this object be spun out on the stack? */
-			_scanStackFrame = !breadthFirst && !isBreadthFirst() ? reserveRootCopyspace(evacuationRegion, slotObjectSizeAfterCopy) : NULL;
+			_scanStackFrame = !breadthFirst ? reserveRootCopyspace(evacuationRegion, slotObjectSizeAfterCopy) : NULL;
 			if (NULL != _scanStackFrame) {
 				Debug_MM_true(_scanStackFrame == _whiteStackFrame[evacuationRegion]);
 
@@ -1296,12 +1295,16 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 					_whiteList[evacuationRegion].add(_largeCopyspace.trim());
 				}
 
-			} else if ((NULL == *stackFrame) && (effectiveCopyspace->getCopySize() >= _workReleaseThreshold)) {
+			} else if (NULL == *stackFrame) {
 
-				/* pull work from head of effective copyspace into a work packet, leaving only trailing whitespace in copyspace */
-				MM_EvacuatorWorkPacket *work = _freeList.next();
-				work->base = (omrobjectptr_t)effectiveCopyspace->rebase(&work->length);
-				addWork(work);
+				/* do not release work if whitespace remainder too small */
+				if ((effectiveCopyspace->getCopySize() >= _workReleaseThreshold) && (effectiveCopyspace->getWhiteSize() > MM_EvacuatorBase::min_work_packet_size)) {
+
+					/* pull work from head of effective copyspace into a work packet, leaving only trailing whitespace in copyspace */
+					MM_EvacuatorWorkPacket *work = _freeList.next();
+					work->base = (omrobjectptr_t)effectiveCopyspace->rebase(&work->length);
+					addWork(work);
+				}
 			}
 
 		} else if (effectiveCopyspace == &_largeCopyspace) {

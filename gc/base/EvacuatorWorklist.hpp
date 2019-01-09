@@ -78,7 +78,17 @@ public:
 	/**
 	 * Mark work packet as free and return its successor
 	 */
-	MM_EvacuatorWorkPacket *flush(MM_EvacuatorWorkPacket *packet) { packet->base = NULL; return packet->next; }
+	MM_EvacuatorWorkPacket *flush(MM_EvacuatorWorkPacket *packet)
+	{
+		MM_EvacuatorWorkPacket *next = packet->next;
+
+		packet->base = NULL;
+		packet->length = 0;
+		packet->offset = 0;
+		packet->next = NULL;
+
+		return next;
+	}
 
 	/**
 	 * Return the number of contained free elements
@@ -334,7 +344,10 @@ public:
 
 		VM_AtomicSupport::setU64(&_volume, 0);
 
-		_head = _tail = NULL;
+		while (NULL != _head) {
+			_head = freeList->flush(_head);
+		}
+		_tail = NULL;
 
 		Debug_MM_true((0 == _volume) == (NULL == _head));
 	}

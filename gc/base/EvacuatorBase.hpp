@@ -96,6 +96,10 @@ public:
 	/* largest amount of whitespace that can be discarded from the scan stack and outside copyspaces */
 	static const uintptr_t max_scanspace_remainder = 32;
 	static const uintptr_t max_copyspace_remainder = 768;
+
+	/* Work packet size cannot be less than this */
+	static const uintptr_t min_work_packet_size = 2048 + max_copyspace_remainder;
+	/* Threshold for number of large objects passed over while trying to fill remainder wqhitespace in copyspace */
 	static const uintptr_t max_large_object_sequence = 3;
 
 	/* minimum size of whitespace that is recyclable from whitelists */
@@ -110,8 +114,6 @@ public:
 	static const uintptr_t min_scan_stack_depth = 1;
 	/* Object size threshold for copying inside -cannot be set to a value lower than this */
 	static const uintptr_t min_inside_object_size = OMR_MINIMUM_OBJECT_SIZE;
-	/* Work packet size cannot be less than this */
-	static const uintptr_t min_work_packet_size = 1024;
 
 	/* number of elements in whitelist backing array must be (2^N)-1 for some N */
 	static const uintptr_t max_whitelist = 15;
