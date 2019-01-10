@@ -66,7 +66,7 @@ MM_ScavengerStats::MM_ScavengerStats()
 	,_avgTenureBytes(0)
 	,_tiltRatio(0)
 	,_nextScavengeWillPercolate(false)
-#if defined(OMR_GC_LARGE_OBJECT_AREA)	
+#if defined(OMR_GC_LARGE_OBJECT_AREA)
 	,_avgTenureLOABytes(0)
 	,_avgTenureSOABytes(0)
 #endif /* OMR_GC_LARGE_OBJECT_AREA */
@@ -115,7 +115,7 @@ MM_ScavengerStats::getFlipHistory(uintptr_t lookback)
 	return flipHistory;
 }
 
-void 
+void
 MM_ScavengerStats::clear(bool firstIncrement)
 {
 	if (firstIncrement) {
@@ -132,7 +132,7 @@ MM_ScavengerStats::clear(bool firstIncrement)
 	memset(&_flipHistory[_flipHistoryNewIndex], 0, sizeof(_flipHistory[_flipHistoryNewIndex]));
 
 	/* _gcCount is not cleared as the value must persist across cycles */
-	
+
 	_rememberedSetOverflow = 0;
 	_causedRememberedSetOverflow = 0;
 	_scanCacheOverflow = 0;
@@ -141,12 +141,15 @@ MM_ScavengerStats::clear(bool firstIncrement)
 	_backout = 0;
 	_flipCount = 0;
 	_flipBytes = 0;
+#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	_hashBytes = 0;
+#endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 	_tenureAggregateCount = 0;
 	_tenureAggregateBytes = 0;
-#if defined(OMR_GC_LARGE_OBJECT_AREA)	
+#if defined(OMR_GC_LARGE_OBJECT_AREA)
 	_tenureLOACount = 0;
 	_tenureLOABytes = 0;
-#endif /* OMR_GC_LARGE_OBJECT_AREA */			
+#endif /* OMR_GC_LARGE_OBJECT_AREA */
 	_failedTenureCount = 0;
 	_failedTenureBytes = 0;
 	_failedTenureLargest = 0;

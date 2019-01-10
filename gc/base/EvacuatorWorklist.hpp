@@ -110,9 +110,10 @@ public:
 		MM_EvacuatorWorkPacket *free = NULL;
 		if (0 < _count) {
 			free = _head;
-			free->length = 0;
 			_head = free->next;
 			free->next = NULL;
+			free->base = NULL;
+			free->length = 0;
 			free->offset = 0;
 			_count -= 1;
 		}
@@ -131,10 +132,10 @@ public:
 	{
 		Debug_MM_true((0 == _count) == (NULL == _head));
 
-		free->length = 0;
-		free->base = NULL;
-		free->offset = 0;
 		free->next = _head;
+		free->base = NULL;
+		free->length = 0;
+		free->offset = 0;
 		_head = free;
 		_count += 1;
 

@@ -1261,7 +1261,7 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 
 	/* reserve copy space -- this may be obtained from inside whitespace if outside copyspace can't be refreshed */
 	MM_EvacuatorCopyspace * const effectiveCopyspace = reserveOutsideCopyspace(&evacuationRegion, slotObjectSizeAfterCopy, isSplitable);
-	*stackFrame = (NULL != effectiveCopyspace) && (effectiveCopyspace == (MM_EvacuatorCopyspace *)(_whiteStackFrame[evacuationRegion])) ? _whiteStackFrame[evacuationRegion] : NULL;
+	*stackFrame = (effectiveCopyspace == (MM_EvacuatorCopyspace *)(_whiteStackFrame[evacuationRegion])) ? (MM_EvacuatorScanspace *)effectiveCopyspace : NULL;
 
 	if (NULL != effectiveCopyspace) {
 		Debug_MM_true(slotObjectSizeAfterCopy <= effectiveCopyspace->getWhiteSize());
@@ -1295,10 +1295,10 @@ MM_Evacuator::copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader 
 					_whiteList[evacuationRegion].add(_largeCopyspace.trim());
 				}
 
-			} else if (NULL == *stackFrame) {
+			} else if ((NULL == *stackFrame) && (effectiveCopyspace->getCopySize() >= _workReleaseThreshold)) {
 
-				/* do not release work if whitespace remainder too small */
-				if ((effectiveCopyspace->getCopySize() >= _workReleaseThreshold) && (effectiveCopyspace->getWhiteSize() > MM_EvacuatorBase::min_work_packet_size)) {
+				/* do not release work if whitespace remainder too small to accumulate a minimal work packet */
+				if (effectiveCopyspace->getWhiteSize() >= _controller->_minimumWorkspaceSize) {
 
 					/* pull work from head of effective copyspace into a work packet, leaving only trailing whitespace in copyspace */
 					MM_EvacuatorWorkPacket *work = _freeList.next();

@@ -63,6 +63,9 @@ public:
 	uintptr_t _backout;
 	uintptr_t _flipCount;
 	uintptr_t _flipBytes;
+//#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	uintptr_t _hashBytes; // unconditionally declared here only to allow inclusion in GCExtensionsBase.hpp, conditionally used otherwise
+//#endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 	uintptr_t _tenureAggregateCount;
 	uintptr_t _tenureAggregateBytes;
 #if defined(OMR_GC_LARGE_OBJECT_AREA)

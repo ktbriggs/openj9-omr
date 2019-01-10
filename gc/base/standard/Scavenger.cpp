@@ -707,6 +707,9 @@ MM_Scavenger::mergeGCStatsBase(MM_EnvironmentBase *env, MM_ScavengerStats *final
 #endif /* OMR_GC_LARGE_OBJECT_AREA */
 	finalGCStats->_flipCount += scavStats->_flipCount;
 	finalGCStats->_flipBytes += scavStats->_flipBytes;
+#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	finalGCStats->_hashBytes += scavStats->_hashBytes;
+#endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 	finalGCStats->_failedTenureCount += scavStats->_failedTenureCount;
 	finalGCStats->_failedTenureBytes += scavStats->_failedTenureBytes;
 	finalGCStats->_failedTenureLargest = OMR_MAX(scavStats->_failedTenureLargest,
@@ -1592,6 +1595,9 @@ MM_Scavenger::copy(MM_EnvironmentStandard *env, MM_ForwardedHeader* forwardedHea
 			Assert_MM_true(copyCache->flags & OMR_SCAVENGER_CACHE_TYPE_SEMISPACE);
 			scavStats->_flipCount += 1;
 			scavStats->_flipBytes += objectCopySizeInBytes;
+#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+			scavStats->_hashBytes += (objectReserveSizeInBytes - objectCopySizeInBytes);
+#endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 			scavStats->getFlipHistory(0)->_flipBytes[oldObjectAge + 1] += objectReserveSizeInBytes;
 		}
 	} else {
@@ -3946,23 +3952,20 @@ MM_Scavenger::masterThreadGarbageCollect(MM_EnvironmentBase *envBase, MM_Allocat
 				(uint64_t)omrtime_hires_delta(0, stats->_syncStallTime, OMRPORT_TIME_DELTA_IN_MICROSECONDS),
 				(uint64_t)omrtime_hires_delta(0, stats->_completeStallTime, OMRPORT_TIME_DELTA_IN_MICROSECONDS),
 				scavengeMicros);
-			uint64_t scavengeBytes = stats->_flipBytes + stats->_tenureAggregateBytes;
 			if (!_extensions->isEvacuatorEnabled()) {
+				uint64_t scavengeBytes = stats->_flipBytes + stats->_hashBytes + stats->_tenureAggregateBytes;
 				uint64_t insideBytes = (scavengeBytes > stats->_work_packetsize_sum) ? (scavengeBytes - stats->_work_packetsize_sum) : 0;
 				omrtty_printf("%5llu      :%10s; %llx 0 %llx %llx 0 %llx\n", (uint64_t)stats->_gcCount, scavengeCompletedSuccessfully(env) ? "end cycle" : "backout",
 						scavengeBytes, insideBytes, (uint64_t)stats->_tenureAggregateBytes, (uint64_t)(stats->_flipDiscardBytes + stats->_tenureDiscardBytes));
 			} else {
 				/* evacuator copied/scanned byte counts may include bytes added on 1st generational copy and not included in stats byte counts */
-				uint64_t evacuatedBytes = _copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure];
-				/* so adjust reported evacuator scanned byte count by subtracting the difference between evacuator and scavenger copied byte counts */
-				uint64_t scannedBytes = _scannedBytes - (evacuatedBytes - scavengeBytes);
+				uint64_t copiedBytes = _copiedBytes[MM_Evacuator::survivor] + _copiedBytes[MM_Evacuator::tenure];
 				/* bytes copied inside stack frames */
-				uint64_t insideBytes = evacuatedBytes - stats->_work_packetsize_sum;
+				uint64_t insideBytes = _scannedBytes - stats->_work_packetsize_sum;
 				omrtty_printf("%5llu %2llu   :%10s; %llx %llx %llx %llx %llx %llx\n", (uint64_t)getEpoch()->gc, (uint64_t)getEpoch()->epoch, isAborting() ? "backout" : "end cycle",
-						scavengeBytes, scannedBytes, insideBytes, _copiedBytes[MM_Evacuator::tenure], _finalDiscardedBytes, _finalFlushedBytes);
+						copiedBytes, _scannedBytes, insideBytes, _copiedBytes[MM_Evacuator::tenure], _finalDiscardedBytes, _finalFlushedBytes);
 				/* total copied/scanned byte counts should be equal unless we are aborting */
-				Assert_MM_true((evacuatedBytes == _scannedBytes) || isAborting());
-				Assert_MM_true((scavengeBytes == scannedBytes) || isAborting());
+				Assert_MM_true((copiedBytes == _scannedBytes) || isAborting());
 				Assert_MM_true(isAborting() == !scavengeCompletedSuccessfully(env));
 #if defined(EVACUATOR_DEBUG)
 				if (_debugger.isDebugEpoch()) {
