@@ -180,6 +180,11 @@ public:
 	}
 
 	/**
+	 * Advance base pointer to copy head, clearing work from copyspace
+	 */
+	void erase() { _base = _copy; }
+
+	/**
 	 * Trim remaining free space from end and return it as whitespace.
 	 *
 	 * @return whitespace from end of copyspace, or NULL if none available

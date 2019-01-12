@@ -25,6 +25,7 @@
 #include "ModronAssertions.h"
 
 #include "Dispatcher.hpp"
+#include "EvacuatorBase.hpp"
 #include "EnvironmentBase.hpp"
 
 #include "ScavengerStats.hpp"

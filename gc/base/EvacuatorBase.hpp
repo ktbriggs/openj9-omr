@@ -98,9 +98,9 @@ public:
 	static const uintptr_t max_copyspace_remainder = 768;
 
 	/* Work packet size cannot be less than this */
-	static const uintptr_t min_work_packet_size = 2048 + max_copyspace_remainder;
-	/* Threshold for number of large objects passed over while trying to fill remainder wqhitespace in copyspace */
-	static const uintptr_t max_large_object_sequence = 3;
+	static const uintptr_t min_work_packet_size = 2048;
+	/* shift-multiplier for minimum work packet size determines threshold byte count for objects overflowing copyspace whitespace remainder */
+	static const uintptr_t max_large_object_overflow_shift = 0;
 
 	/* minimum size of whitespace that is recyclable from whitelists */
 	static const uintptr_t min_recyclable_whitespace = 8192;

@@ -251,19 +251,21 @@ public:
 	uint64_t volume(const MM_EvacuatorWorkPacket *work) { return work->length * ((0 == work->offset) ? 1 : sizeof(fomrobject_t)); }
 
 	/**
-	 * Peek at the work packet at the head of the list, or NULL
-	 */
-	const MM_EvacuatorWorkPacket *peek() { return _head; }
-
-	/**
 	 * Returns a pointer to the volatile sum of the number of bytes contained in work packets in the list
 	 */
 	volatile uint64_t *volume() { return &_volume; }
 
 	/**
-	 * Add a work packet at the end of the list.
+	 * Peek at the work packet at the head of the list, or NULL
+	 */
+	const MM_EvacuatorWorkPacket *peek() { return _head; }
+
+	/**
+	 * Add a work packet at the end of the list, or merge it into the tail packet. If merged the
+	 * input work packet pointer will be returned, otherwise NULL is returned.
 	 *
 	 * @param work the packet to add
+	 * @return work if merged into tail packet, otherwise NULL
 	 */
 	MM_EvacuatorWorkPacket *
 	add(MM_EvacuatorWorkPacket *work)
@@ -277,7 +279,8 @@ public:
 
 		work->next = NULL;
 		if (NULL != _tail) {
-			if ((0 == _tail->offset) && (MM_EvacuatorBase::min_work_packet_size > _tail->length) && ((uintptr_t)work->base == ((uintptr_t)_tail->base + _tail->length))) {
+			/* work packets can be merged if not split array packets and work is contiguous with tail */
+			if ((0 == (_tail->offset + work->offset)) && (((uintptr_t)_tail->base + _tail->length) == (uintptr_t)work->base)) {
 				_tail->length += work->length;
 			} else {
 				_tail = _tail->next = work;
@@ -292,6 +295,7 @@ public:
 		Debug_MM_true((NULL == _head) == (NULL == _tail));
 		Debug_MM_true((_head != _tail) || (NULL == _head) || (volume(_head) == _volume));
 
+		/* caller should discard (merged work packet to freelist) if not null */
 		return work;
 	}
 

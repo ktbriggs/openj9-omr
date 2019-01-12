@@ -533,17 +533,18 @@ MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, 
 
 	/* limit survivor allocations during root/remembered/clearable scans and during tail end of heap scan */
 	if (MM_Evacuator::survivor == region) {
-		if ((10 * _copiedBytes[MM_Evacuator::survivor]) > (9 * calculateProjectedEvacuationBytes())) {
+		if ((5 * _copiedBytes[MM_Evacuator::survivor]) > (4 * calculateProjectedEvacuationBytes())) {
 
-			/* scale down by aggregate evacuator bandwidth and evacuator volume of work */
+			/* scale down by aggregate evacuator bandwidth or relative volume of unscanned work (factor must be in [0..1]) */
+			double volumeScale = 1.0;
 			uint64_t evacuatorVolumeOfWork = evacuator->getVolumeOfWork();
-
-			/* factor must be in [0..1] */
-			double queueScale = ((uint64_t)_maximumWorkspaceSize > evacuatorVolumeOfWork) ? ((double)evacuatorVolumeOfWork / (double)_maximumWorkspaceSize) : 1.0;
+			if ((uint64_t)_maximumWorkspaceSize > evacuatorVolumeOfWork) {
+				volumeScale = ((double)evacuatorVolumeOfWork / (double)_maximumWorkspaceSize);
+			}
 			double stallScale = (double)(_evacuatorCount - _stalledEvacuatorCount) / (double)_evacuatorCount;
 
-			/* reduce whitesize by aggregate bandwidth and volume scaling factors */
-			whitesize = (uintptr_t)(whitesize * OMR_MIN(queueScale, stallScale));
+			/* reduce whitesize by lesser of aggregate bandwidth and work scaling factors */
+			whitesize = (uintptr_t)(whitesize * OMR_MIN(volumeScale, stallScale));
 		}
 	}
 
