@@ -121,8 +121,8 @@ private:
 	MMINLINE void copy();
 	MMINLINE void pop();
 
-	MMINLINE uintptr_t maximumCopyspaceOverflow();
-	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, const bool isSplittable);
+	MMINLINE uintptr_t maximumLargeObjectOverflow();
+	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, bool useLargeCopyspace);
 	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy, MM_EvacuatorScanspace **stackFrame);
 
 	MMINLINE omrobjectptr_t copyForward(MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, MM_EvacuatorCopyspace * const copyspace, const uintptr_t originalLength, const uintptr_t forwardedLength);
@@ -417,9 +417,9 @@ public:
 		, _workReleaseThreshold(0)
 		, _tenureMask(0)
 		, _stats(NULL)
-		, _stackBottom(MM_EvacuatorScanspace::newInstanceArray(_forge, _maxStackDepth))
-		, _stackCeiling(_stackBottom + _maxStackDepth)
-		, _stackLimit(_stackCeiling)
+		, _stackBottom(MM_EvacuatorScanspace::newInstanceArray(_forge, OMR_MAX(3, _maxStackDepth)))
+		, _stackCeiling(_stackBottom + OMR_MAX(3, _maxStackDepth))
+		, _stackLimit(_stackBottom + _maxStackDepth)
 		, _scanStackFrame(NULL)
 		, _copyspace(MM_EvacuatorCopyspace::newInstanceArray(_forge, evacuate))
 		, _whiteList(MM_EvacuatorWhitelist::newInstanceArray(_forge, evacuate))

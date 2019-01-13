@@ -146,17 +146,19 @@ bool
 MM_EvacuatorController::collectorStartup(MM_GCExtensionsBase* extensions)
 {
 #if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	if (extensions->isEvacuatorEnabled()) {
 #if defined(EVACUATOR_DEBUG)
-	if (_debugger.isDebugEnd()) {
+		if (_debugger.isDebugEnd()) {
 #endif /* defined(EVACUATOR_DEBUG) */
-		OMRPORT_ACCESS_FROM_OMRVM(_omrVM);
-		_collectorStartTime = omrtime_hires_clock();
-		omrtty_printf("%5llu      :   startup; stack-depth:%llu; object-size:%llx; frame-width:%llx; work-size:%llx; work-quanta:%llx\n", (uint64_t)_history.epoch()->gc,
+			OMRPORT_ACCESS_FROM_OMRVM(_omrVM);
+			_collectorStartTime = omrtime_hires_clock();
+			omrtty_printf("%5llu      :   startup; stack-depth:%llu; object-size:%llx; frame-width:%llx; work-size:%llx; work-quanta:%llx\n", (uint64_t)_history.epoch()->gc,
 				(uint64_t)_extensions->evacuatorMaximumStackDepth, (uint64_t)_extensions->evacuatorMaximumInsideCopySize, (uint64_t)_extensions->evacuatorMaximumInsideCopyDistance,
 				(uint64_t)_extensions->evacuatorWorkQuantumSize, (uint64_t)_extensions->evacuatorWorkQuanta);
 #if defined(EVACUATOR_DEBUG)
-	}
+		}
 #endif /* defined(EVACUATOR_DEBUG) */
+	}
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
 	return true;
@@ -168,15 +170,17 @@ MM_EvacuatorController::collectorShutdown(MM_GCExtensionsBase* extensions)
 	flushTenureWhitespace(true);
 
 #if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	if (extensions->isEvacuatorEnabled()) {
 #if defined(EVACUATOR_DEBUG)
-	if (_debugger.isDebugEnd()) {
+		if (_debugger.isDebugEnd()) {
 #endif /* defined(EVACUATOR_DEBUG) */
-		OMRPORT_ACCESS_FROM_OMRVM(_omrVM);
-		uint64_t collectorElapsedMicros = omrtime_hires_delta(_collectorStartTime, omrtime_hires_clock(), OMRPORT_TIME_DELTA_IN_MICROSECONDS);
-		omrtty_printf("%5llu      :  shutdown; elapsed:%llu; flushed:%llx\n", (uint64_t)_history.epoch()->gc, (uint64_t)collectorElapsedMicros, (uint64_t)_globalTenureFlushedBytes);
+			OMRPORT_ACCESS_FROM_OMRVM(_omrVM);
+			uint64_t collectorElapsedMicros = omrtime_hires_delta(_collectorStartTime, omrtime_hires_clock(), OMRPORT_TIME_DELTA_IN_MICROSECONDS);
+			omrtty_printf("%5llu      :  shutdown; elapsed:%llu; flushed:%llx\n", (uint64_t)_history.epoch()->gc, (uint64_t)collectorElapsedMicros, (uint64_t)_globalTenureFlushedBytes);
 #if defined(EVACUATOR_DEBUG)
+		}
+#endif /* defined(EVACUATOR_DEBUG) */
 	}
-#endif /* defined(EVACUATOR_DEBUG) */
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 }
 

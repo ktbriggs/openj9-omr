@@ -3938,13 +3938,15 @@ MM_Scavenger::masterThreadGarbageCollect(MM_EnvironmentBase *envBase, MM_Allocat
 				omrtty_printf(" %llu", (uint64_t)stats->_large_object_counts[largesize]);
 			}
 			omrtty_printf("\n");
-			uint64_t stackActivations[_extensions->evacuatorMaximumStackDepth];
-			uint64_t sumActivations = sumStackActivations(stackActivations);
-			omrtty_printf("%5llu      :     stack;", (uint64_t)stats->_gcCount);
-			for (uintptr_t depth = 0; depth < _extensions->evacuatorMaximumStackDepth; depth += 1) {
-				omrtty_printf(" %0.3f", (double)stackActivations[depth] / (double)sumActivations);
+			if (_extensions->isEvacuatorEnabled()) {
+				uint64_t stackActivations[_extensions->evacuatorMaximumStackDepth];
+				uint64_t sumActivations = sumStackActivations(stackActivations);
+				omrtty_printf("%5llu      :     stack;", (uint64_t)stats->_gcCount);
+				for (uintptr_t depth = 0; depth < _extensions->evacuatorMaximumStackDepth; depth += 1) {
+					omrtty_printf(" %0.3f", (double)stackActivations[depth] / (double)sumActivations);
+				}
+				omrtty_printf(" %llu\n", sumActivations);
 			}
-			omrtty_printf(" %llu\n", sumActivations);
 			uint64_t scavengeMicros = omrtime_hires_delta(_extensions->incrementScavengerStats._startTime, _extensions->incrementScavengerStats._endTime, OMRPORT_TIME_DELTA_IN_MICROSECONDS);
 			omrtty_printf("%5llu      : idle time; %llu %llu %llu %llu %llu %llu %llu\n", stats->_gcCount,
 				(uint64_t)stats->_workStallCount, (uint64_t)stats->_syncStallCount, (uint64_t)stats->_completeStallCount,
