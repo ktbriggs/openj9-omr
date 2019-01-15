@@ -738,34 +738,43 @@ MM_Evacuator::getWork()
 	MM_EvacuatorWorkPacket *work = NULL;
 	if (!isAbortedCycle()) {
 
-		/* outside copyspaces must be cleared before engaging the controller to find other work */
-		uintptr_t copy[2] = { _copyspace[survivor].getCopySize(), _copyspace[tenure].getCopySize() };
-
-		/* if shortest outside copyspace not empty take longest, else flush longest and take shortest */
-		EvacuationRegion take = (copy[survivor] <= copy[tenure]) ? tenure : survivor;
-		EvacuationRegion donate = _controller->shouldFlushWork(0) ? otherOutsideRegion(take) : unreachable;
-		if ((unreachable != donate) && (0 < copy[otherOutsideRegion(take)])) {
-			take = donate;
-			donate = otherOutsideRegion(take);
+		/* reduce work release threshold to 50% of current value while flushing work to feed worklist */
+		if (_controller->shouldFlushWork(getVolumeOfWork())) {
+			/* lower stack limit to mark start of flushing and reset or lower work release threshold if thrashing on residual outside copy to produce distributable work while flushing */
+			uintptr_t flushThreshold = (_stackLimit == _stackCeiling) ? _controller->_minimumWorkspaceSize : (_workReleaseThreshold >> 1);
+			_workReleaseThreshold = OMR_MAX(flushThreshold, MM_EvacuatorBase::min_workspace_size);
+			if (_stackLimit == _stackCeiling) {
+				/* one-time notification in case there is work in the worklist */
+				_controller->notifyOfWork(getVolumeOfWork());
+				_stackLimit = _stackBottom + 1;
+			}
+		} else if (!isBreadthFirst() && (_stackLimit < _stackCeiling)) {
+			/* restore work release threshold to lower bound of operational range */
+			_workReleaseThreshold = OMR_MAX(_workReleaseThreshold, _controller->_minimumWorkspaceSize);
+			/* raise stack limit to mark end of flushing */
+			_stackLimit = _stackCeiling;
+		} else if (_stackLimit < (_stackBottom + evacuate)) {
+			/* restore work release threshold to lower bound of operational range */
+			_workReleaseThreshold = OMR_MAX(_workReleaseThreshold, _controller->_minimumWorkspaceSize);
+			/* raise stack limit to mark end of flushing */
+			_stackLimit = _stackBottom + evacuate;
 		}
 
-		if ((unreachable != take) && (0 < copy[take])) {
+		/* outside copyspaces must be cleared before engaging the controller to find other work */
+		uintptr_t copy[2] = { _copyspace[survivor].getCopySize(), _copyspace[tenure].getCopySize() };
+		EvacuationRegion take = (copy[survivor] < copy[tenure]) ? survivor : tenure;
+		if (0 == copy[take]) {
+			take = otherOutsideRegion(take);
+		}
+
+		/* take shortest nonempty outside copyspace and return, if both empty try worklist */
+		if (0 < copy[take]) {
 
 			/* take work from outside copyspace */
 			work = _freeList.next();
 			work->base = (omrobjectptr_t)_copyspace[take].rebase(&work->length);
 
-			/* flush other outside copyspace to worklist if other evacuators are stalling */
-			if (unreachable != donate) {
-				MM_EvacuatorWorkPacket *flush = _freeList.next();
-				flush->base = (omrobjectptr_t)_copyspace[donate].rebase(&flush->length);
-				addWork(flush);
-			}
-
-			/* reset work packet release threshold to produce small packets until work volume increases */
-			_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
-
-			/* return unlisted work without notifying other threads */
+			/* return work taken from outside copyspace without notifying other threads */
 			return work;
 
 		} else {
@@ -1159,7 +1168,7 @@ MM_Evacuator::nextStackFrame(const EvacuationRegion evacuationRegion, MM_Evacuat
 		frame += 1;
 	}
 
-	if (frame >= _stackLimit) {
+	if ((frame >= _stackCeiling) || ((frame >= _stackLimit) && (_stackLimit > (_stackBottom + 1)))) {
 		frame = NULL;
 	}
 
