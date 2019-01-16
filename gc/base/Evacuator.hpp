@@ -115,6 +115,8 @@ private:
 	MMINLINE MM_EvacuatorScanspace *nextStackFrame(const EvacuationRegion evacuationRegion, MM_EvacuatorScanspace *frame);
 	MMINLINE GC_ObjectScanner *nextObjectScanner(MM_EvacuatorScanspace *const scanspace, bool finalizeObjectScan = true);
 
+	MMINLINE MM_EvacuatorScanspace * clear();
+	MMINLINE void pull(MM_EvacuatorCopyspace *copyspace);
 	MMINLINE void pull(MM_EvacuatorWorkPacket *work);
 	MMINLINE void push(MM_EvacuatorScanspace *const nextStackFrame);
 	MMINLINE void scan();
@@ -134,7 +136,7 @@ private:
 
 	MMINLINE void addWork(MM_EvacuatorWorkPacket *work);
 	MMINLINE MM_EvacuatorWorkPacket *findWork();
-	MMINLINE MM_EvacuatorWorkPacket *getWork();
+	MMINLINE bool getWork();
 
 	MMINLINE bool rememberObject(omrobjectptr_t object);
 	MMINLINE bool isNurseryAge(uintptr_t objectAge) { return (0 == (((uintptr_t)1 << objectAge) & _tenureMask)); }

@@ -582,17 +582,10 @@ MM_Evacuator::scanHeap()
 	_completedScan = false;
 
 	/* try to find some work from this or other evacuator's worklist to pull into the scan stack */
-	MM_EvacuatorWorkPacket *work = getWork();
-	while (NULL != work) {
-
-		/* pull work onto bottom stack frame */
-		pull(work);
+	while (getWork()) {
 
 		/* scan work packet, pull and scan work from outside copyspaces until both are empty */
 		scan();
-
-		/* find more work to pull and scan, until scanning is complete or cycle aborted */
-		work = getWork();
 	}
 
 	Debug_MM_true(_completedScan);
@@ -730,7 +723,7 @@ MM_Evacuator::findWork()
 	return NULL;
 }
 
-MM_EvacuatorWorkPacket *
+bool
 MM_Evacuator::getWork()
 {
 	Debug_MM_true(NULL == _scanStackFrame);
@@ -770,12 +763,11 @@ MM_Evacuator::getWork()
 		/* take shortest nonempty outside copyspace and return, if both empty try worklist */
 		if (0 < copy[take]) {
 
-			/* take work from outside copyspace */
-			work = _freeList.next();
-			work->base = (omrobjectptr_t)_copyspace[take].rebase(&work->length);
+			/* pull work from outside copyspace */
+			pull(&_copyspace[take]);
 
-			/* return work taken from outside copyspace without notifying other threads */
-			return work;
+			/* return without notifying other threads */
+			return true;
 
 		} else {
 
@@ -828,31 +820,35 @@ MM_Evacuator::getWork()
 		_stats->countWorkPacketSize(headerSize + _workList.volume(work), _controller->_maximumWorkspaceSize);
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
+		/* pull work from work packet */
+		pull(work);
+
 		/* reset work packet release threshold to produce small packets until work volume increases */
 		_workReleaseThreshold = _controller->calculateOptimalWorkPacketSize(getVolumeOfWork());
 
 		/* in case of other stalled evacuators */
 		_controller->notifyOfWork(getVolumeOfWork());
+
+		/* return packet to freelist */
+		_freeList.add(work);
+
+		return true;
 	}
 
 	/* if no work at this point heap scan completes (or aborts) */
-	return work;
+	return false;
 }
 
-void
-MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
+MM_EvacuatorScanspace *
+MM_Evacuator::clear()
 {
-	Debug_MM_true(NULL != work);
-	Debug_MM_true(0 < work->length);
-	Debug_MM_true(NULL != work->base);
 	Debug_MM_true(NULL == _scanStackFrame);
 	Debug_MM_true(0 == _stackBottom->getWorkSize());
 
-	/* select stack frame to pull work into */
 	if (isBreadthFirst()) {
 
 		/* pull work into frame above the static white stack frames in _stackBottom[survivor|tenure] */
-		_scanStackFrame = &_stackBottom[evacuate];
+		return &_stackBottom[evacuate];
 
 	} else {
 
@@ -873,8 +869,47 @@ MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
 			_whiteStackFrame[bottomRegion] = whiteFrame;
 		}
 
-		_scanStackFrame = _stackBottom;
+		return _stackBottom;
 	}
+}
+
+void
+MM_Evacuator::pull(MM_EvacuatorCopyspace *copyspace)
+{
+	Debug_MM_true(0 < copyspace->getCopySize());
+
+	/* select stack frame to pull work into */
+	_scanStackFrame = clear();
+	/* the work packet contains a contiguous series of objects -- set scanspace base = scan, copy = limit = end = scan + length */
+	_scanStackFrame->pullWork(copyspace);
+	/* object scanners will be instantiated and _scannedBytes updated as objects in scanspace are scanned */
+	_splitArrayBytesToScan = 0;
+
+#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	_scanStackFrame->activated();
+#if defined(EVACUATOR_DEBUG)
+	if (_controller->_debugger.isDebugWork()) {
+		OMRPORT_ACCESS_FROM_ENVIRONMENT(_env);
+		omrtty_printf("%5lu %2llu %2llu: push work; base:%llx; length:%llx; vow:%llx; sow:%llx; tow:%llx ", _controller->getEpoch()->gc, (uint64_t)_controller->getEpoch()->epoch, (uint64_t)_workerIndex,
+				(uint64_t)_scanStackFrame->getBase(), (uint64_t)_scanStackFrame->getWorkSize(), getVolumeOfWork(), (uint64_t)_copyspace[survivor].getCopySize(), (uint64_t)_copyspace[tenure].getCopySize());
+		_controller->printEvacuatorBitmap(_env, "stalled", _controller->sampleStalledMap());
+		_controller->printEvacuatorBitmap(_env, "; resuming", _controller->sampleResumingMap());
+		omrtty_printf("\n");
+	}
+	debugStack("W pull");
+#endif /* defined(EVACUATOR_DEBUG) */
+#endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
+}
+
+void
+MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
+{
+	Debug_MM_true(NULL != work);
+	Debug_MM_true(0 < work->length);
+	Debug_MM_true(NULL != work->base);
+
+	/* select stack frame to pull work into */
+	_scanStackFrame = clear();
 
 	/* load work packet into scan stack frame */
 	if (isSplitArrayPacket(work)) {
@@ -909,8 +944,6 @@ MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
 	debugStack("W pull");
 #endif /* defined(EVACUATOR_DEBUG) */
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
-
-	_freeList.add(work);
 }
 
 void
