@@ -100,7 +100,7 @@ public:
 	/* Work packet size cannot be less than this */
 	static const uintptr_t min_workspace_size = 256;
 	/* multiplier for minimum work packet size determines threshold byte count for objects overflowing copyspace whitespace remainder */
-	static const uintptr_t max_large_object_overflow_quanta = 3;
+	static const uintptr_t max_large_object_overflow_quanta = 1;
 
 	/* minimum size of whitespace that is recyclable from whitelists */
 	static const uintptr_t min_recyclable_whitespace = 8192;

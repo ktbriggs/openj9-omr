@@ -270,7 +270,7 @@ MM_EvacuatorController::bindWorker(MM_EnvironmentStandard *env)
 		Assert_MM_true(NULL != _evacuatorTask[workerIndex]);
 	}
 
-	/* controller doesn't have final view on evacuator thread count until after tasks are dispatched ... */
+	/* controller doesn't have final view on evacuator thread count until after first task is dispatched ... */
 	if (0 == _evacuatorCount) {
 
 		acquireController();
@@ -282,10 +282,10 @@ MM_EvacuatorController::bindWorker(MM_EnvironmentStandard *env)
 			_evacuatorCount = env->_currentTask->getThreadCount();
 			fillEvacuatorBitmap(_evacuatorMask);
 
-			/* set upper bounds for tlh allocation size, indexed by outside region -- reduce these for small working sets */
+			/* set upper bounds for tlh allocation size, indexed by outside region -- reduce these for small survivor spaces */
 			uintptr_t copyspaceSize = _maximumCopyspaceSize;
 			uint64_t projectedEvacuationBytes = calculateProjectedEvacuationBytes();
-			while ((copyspaceSize > _minimumCopyspaceSize) && (4 * copyspaceSize * _evacuatorCount) > projectedEvacuationBytes) {
+			while ((copyspaceSize > _minimumCopyspaceSize) && ((4 * copyspaceSize * _evacuatorCount) > projectedEvacuationBytes)) {
 				/* scale down tlh allocation limit until maximal cache size is small enough to ensure adequate distribution */
 				copyspaceSize -= _minimumCopyspaceSize;
 			}
@@ -433,7 +433,8 @@ MM_EvacuatorController::isWaitingToCompleteStall(MM_Evacuator *worker, MM_Evacua
 	}
 
 	Debug_MM_true(testEvacuatorBit(workerIndex, _stalledEvacuatorBitmap));
-	return (!testEvacuatorBit(workerIndex, _resumingEvacuatorBitmap));
+
+	return !testEvacuatorBit(workerIndex, _resumingEvacuatorBitmap);
 }
 
 MM_EvacuatorWorkPacket *
@@ -538,7 +539,6 @@ MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, 
 	/* limit survivor allocations during root/remembered/clearable scans and during tail end of heap scan */
 	if (MM_Evacuator::survivor == region) {
 		if ((5 * _copiedBytes[MM_Evacuator::survivor]) > (4 * calculateProjectedEvacuationBytes())) {
-
 			/* scale down by aggregate evacuator bandwidth or relative volume of unscanned work (factor must be in [0..1]) */
 			double volumeScale = 1.0;
 			uint64_t evacuatorVolumeOfWork = evacuator->getVolumeOfWork();
@@ -577,7 +577,7 @@ MM_EvacuatorController::getWhitespace(MM_Evacuator *evacuator, MM_Evacuator::Eva
 	MM_EnvironmentBase *env = evacuator->getEnvironment();
 
 	/* try to allocate a tlh unless object won't fit in outside copyspace remainder and remainder is still too big to whitelist */
-	uintptr_t optimalSize =  calculateOptimalWhitespaceSize(evacuator, region);
+	uintptr_t optimalSize =  (0 < length) ? calculateOptimalWhitespaceSize(evacuator, region) : _minimumCopyspaceSize;
 	uintptr_t maximumLength = optimalSize;
 	if (length <= maximumLength) {
 
@@ -768,10 +768,10 @@ MM_EvacuatorController::printEvacuatorBitmap(MM_EnvironmentBase *env, const char
 }
 
 uint64_t
-MM_EvacuatorController::sumStackActivations(uint64_t *stackActivations)
+MM_EvacuatorController::sumStackActivations(uint64_t *stackActivations, uintptr_t maxFrame)
 {
 	uint64_t sum = 0;
-	for (uintptr_t depth = 0; depth < _extensions->evacuatorMaximumStackDepth; depth += 1) {
+	for (uintptr_t depth = 0; depth < maxFrame; depth += 1) {
 		stackActivations[depth] = 0;
 		for (uintptr_t evacuator = 0; evacuator < _evacuatorCount; evacuator += 1) {
 			stackActivations[depth] += _evacuatorTask[evacuator]->getStackActivationCount(depth);

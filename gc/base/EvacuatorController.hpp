@@ -334,7 +334,6 @@ public:
 	/* these methods return accurate results only when caller holds the controller or evacuator mutex */
 	MMINLINE bool isBoundEvacuator(uintptr_t evacuatorIndex) { return testEvacuatorBit(evacuatorIndex, _boundEvacuatorBitmap); }
 	MMINLINE bool isStalledEvacuator(uintptr_t evacuatorIndex) { return isBoundEvacuator(evacuatorIndex) && testEvacuatorBit(evacuatorIndex, _stalledEvacuatorBitmap); }
-	MMINLINE bool shouldFlushWork(uint64_t volumeOfWork) { return (0 < _stalledEvacuatorCount) && (volumeOfWork <= (_minimumWorkQuanta * _minimumWorkspaceSize)); }
 	MMINLINE bool areAnyEvacuatorsStalled() { return (0 < _stalledEvacuatorCount); }
 
 	/**
@@ -572,7 +571,7 @@ public:
 	void printEvacuatorBitmap(MM_EnvironmentBase *env, const char *label, volatile uint64_t *bitmap);
 	void waitToSynchronize(MM_Evacuator *worker, const char *id);
 	void continueAfterSynchronizing(MM_Evacuator *worker, uint64_t startTime, uint64_t endTime, const char *id);
-	uint64_t sumStackActivations(uint64_t *stackActivations);
+	uint64_t sumStackActivations(uint64_t *stackActivations, uintptr_t maxFrame);
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 };
 

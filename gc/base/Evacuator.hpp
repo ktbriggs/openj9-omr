@@ -123,6 +123,7 @@ private:
 	MMINLINE void copy();
 	MMINLINE void pop();
 
+	MMINLINE bool shouldFlushOutside();
 	MMINLINE uintptr_t maximumLargeObjectOverflow();
 	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, bool useLargeCopyspace);
 	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy, MM_EvacuatorScanspace **stackFrame);
@@ -396,10 +397,17 @@ public:
 #endif /* defined(EVACUATOR_DEBUG) */
 
 	/**
-	 * Constructor
+	 * Constructor. The minimum number of stack frames is three - two to hold whitespace and one or more
+	 * for scanning over full stack range up to maxStackDepth. Set maxStackDepth=1 for breadth first scanning
+	 * and maxInsideCopyDistance=0 for depth first scanning.
 	 *
-	 * @param env worker thread environment
-	 * @param dispatcher the dispatcher that is starting this evacuator
+	 * @param workerIndex worker thread index assigned by controller
+	 * @param controller the controller
+	 * @param objectModel the object model
+	 * @param maxStackDepth maximum stack depth
+	 * @param maxInsideCopySize maximum size of objects that can be copied inside stack frame
+	 * @param maxInsideCopyDistance maximum distance from scan frame base to copy head to allow inside copy
+	 * @parma forge the system memory allocator
 	 */
 	MM_Evacuator(uintptr_t workerIndex, MM_EvacuatorController *controller, GC_ObjectModel *objectModel, uintptr_t maxStackDepth, uintptr_t maxInsideCopySize, uintptr_t maxInsideCopyDistance, MM_Forge *forge)
 		: MM_BaseNonVirtual()
@@ -419,9 +427,9 @@ public:
 		, _workReleaseThreshold(0)
 		, _tenureMask(0)
 		, _stats(NULL)
-		, _stackBottom(MM_EvacuatorScanspace::newInstanceArray(_forge, OMR_MAX(3, _maxStackDepth)))
-		, _stackCeiling(_stackBottom + OMR_MAX(3, _maxStackDepth))
-		, _stackLimit(_stackBottom + _maxStackDepth)
+		, _stackBottom(MM_EvacuatorScanspace::newInstanceArray(_forge, OMR_MAX(unreachable, _maxStackDepth)))
+		, _stackCeiling(_stackBottom + OMR_MAX(unreachable, _maxStackDepth))
+		, _stackLimit(_stackCeiling)
 		, _scanStackFrame(NULL)
 		, _copyspace(MM_EvacuatorCopyspace::newInstanceArray(_forge, evacuate))
 		, _whiteList(MM_EvacuatorWhitelist::newInstanceArray(_forge, evacuate))

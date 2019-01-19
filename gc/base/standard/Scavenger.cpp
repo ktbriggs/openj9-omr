@@ -3939,10 +3939,11 @@ MM_Scavenger::masterThreadGarbageCollect(MM_EnvironmentBase *envBase, MM_Allocat
 			}
 			omrtty_printf("\n");
 			if (_extensions->isEvacuatorEnabled()) {
-				uint64_t stackActivations[_extensions->evacuatorMaximumStackDepth];
-				uint64_t sumActivations = sumStackActivations(stackActivations);
+				uintptr_t maxFrame = OMR_MAX(MM_Evacuator::unreachable, _extensions->evacuatorMaximumStackDepth);
+				uint64_t stackActivations[maxFrame];
+				uint64_t sumActivations = sumStackActivations(stackActivations, maxFrame);
 				omrtty_printf("%5llu      :     stack;", (uint64_t)stats->_gcCount);
-				for (uintptr_t depth = 0; depth < _extensions->evacuatorMaximumStackDepth; depth += 1) {
+				for (uintptr_t depth = 0; depth < maxFrame; depth += 1) {
 					omrtty_printf(" %0.3f", (double)stackActivations[depth] / (double)sumActivations);
 				}
 				omrtty_printf(" %llu\n", sumActivations);
