@@ -166,7 +166,7 @@ private:
 	uint64_t  calculateProjectedEvacuationBytes();
 
 	/* calculate whitespace allocation size considering evacuator's production scaling factor */
-	uintptr_t calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region);
+	uintptr_t calculateOptimalWhitespaceSize(uintptr_t evacuatorVolumeOfWork, MM_Evacuator::EvacuationRegion region);
 
 	/* allocate and NULL-fill evacuator pointer array (evacuators are instantiated at gc start as required) */
 	static EvacuatorPointer *

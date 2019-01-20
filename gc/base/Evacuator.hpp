@@ -111,7 +111,7 @@ private:
 	void scanComplete();
 
 	MMINLINE MM_EvacuatorScanspace *reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uintptr_t slotObjectSizeAfterCopy);
-	MMINLINE MM_EvacuatorScanspace *reserveInsideCopyspace(const EvacuationRegion evacuationRegion, const uintptr_t whiteSize, const uintptr_t slotObjectSizeAfterCopy);
+	MMINLINE bool reserveInsideCopyspace(const EvacuationRegion evacuationRegion, const uintptr_t whiteSize, const uintptr_t slotObjectSizeAfterCopy);
 	MMINLINE MM_EvacuatorScanspace *nextStackFrame(const EvacuationRegion evacuationRegion, MM_EvacuatorScanspace *frame);
 	MMINLINE GC_ObjectScanner *nextObjectScanner(MM_EvacuatorScanspace *const scanspace, bool finalizeObjectScan = true);
 

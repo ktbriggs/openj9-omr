@@ -531,24 +531,17 @@ MM_EvacuatorController::calculateProjectedEvacuationBytes()
 }
 
 uintptr_t
-MM_EvacuatorController::calculateOptimalWhitespaceSize(MM_Evacuator *evacuator, MM_Evacuator::EvacuationRegion region)
+MM_EvacuatorController::calculateOptimalWhitespaceSize(uintptr_t evacuatorVolumeOfWork, MM_Evacuator::EvacuationRegion region)
 {
 	/* be greedy with tenure allocations -- unused tenure fragments can be used in next generational gc unless flushed for global gc */
 	uintptr_t whitesize = _copyspaceAllocationCeiling[region];
 
-	/* limit survivor allocations during root/remembered/clearable scans and during tail end of heap scan */
-	if (MM_Evacuator::survivor == region) {
+	/* limit survivor allocations when worklist is depleting during tail end of heap scan */
+	if ((MM_Evacuator::survivor == region) && (_minimumWorkspaceSize > evacuatorVolumeOfWork)) {
 		if ((5 * _copiedBytes[MM_Evacuator::survivor]) > (4 * calculateProjectedEvacuationBytes())) {
-			/* scale down by aggregate evacuator bandwidth or relative volume of unscanned work (factor must be in [0..1]) */
-			double volumeScale = 1.0;
-			uint64_t evacuatorVolumeOfWork = evacuator->getVolumeOfWork();
-			if ((uint64_t)_maximumWorkspaceSize > evacuatorVolumeOfWork) {
-				volumeScale = ((double)evacuatorVolumeOfWork / (double)_maximumWorkspaceSize);
-			}
-			double stallScale = (double)(_evacuatorCount - _stalledEvacuatorCount) / (double)_evacuatorCount;
-
-			/* reduce whitesize by lesser of aggregate bandwidth and work scaling factors */
-			whitesize = (uintptr_t)(whitesize * OMR_MIN(volumeScale, stallScale));
+			/* scale down aggressively by aggregate evacuator bandwidth */
+			double scale = (double)(_evacuatorCount - _stalledEvacuatorCount) / (double)_evacuatorCount;
+			whitesize = (uintptr_t)((double)whitesize * (scale * scale));
 		}
 	}
 
@@ -577,7 +570,7 @@ MM_EvacuatorController::getWhitespace(MM_Evacuator *evacuator, MM_Evacuator::Eva
 	MM_EnvironmentBase *env = evacuator->getEnvironment();
 
 	/* try to allocate a tlh unless object won't fit in outside copyspace remainder and remainder is still too big to whitelist */
-	uintptr_t optimalSize =  (0 < length) ? calculateOptimalWhitespaceSize(evacuator, region) : _minimumCopyspaceSize;
+	uintptr_t optimalSize =  (0 < length) ? calculateOptimalWhitespaceSize(evacuator->getVolumeOfWork(), region) : _minimumCopyspaceSize;
 	uintptr_t maximumLength = optimalSize;
 	if (length <= maximumLength) {
 
