@@ -61,6 +61,15 @@ public:
 	} EvacuationRegion;
 
 private:
+	/* Enumeration of conditions that relate to flushing */
+	typedef enum FlushCondition {
+		breadth_first = 1			/* always flush */
+		, depth_first = 2			/* holding inside copy distance at 0 to force depth-first until inside overflow and outside copyspaces cleared and stack empty */
+		, inside_overflow = 4		/* forcing flush while winding down stack after stack overflow */
+		, outside_overflow = 8		/* forcing flush to fill outside copyspace remainder */
+		, stall = 16				/* forcing flush to service stalled ecavuators */
+	} FlushCondition;
+
 	const uintptr_t _maxStackDepth;					/* number of frames to allocate for the scan stack */
 	const uintptr_t _maxInsideCopySize;				/* limit on size of object that can be copied inside stack frames */
 	const uintptr_t _maxInsideCopyDistance;			/* limit on distance from scan to copy head for copying inside stack frames */
@@ -78,6 +87,7 @@ private:
 	uintptr_t _workReleaseThreshold;				/* number of bytes of unscanned bytes that should accumulate in outside copyspace before rebasing */
 	uintptr_t _tenureMask;							/* used to determine age threshold for tenuring evacuated objects */
 	MM_ScavengerStats *_stats;						/* pointer to MM_EnvironmentBase::_scavengerStats */
+	uintptr_t _flushState;							/* bitmap of flush conditions */
 
 	MM_EvacuatorScanspace * const _stackBottom;		/* bottom (location) of scan stack */
 	MM_EvacuatorScanspace * const _stackCeiling;	/* physical limit of depth of scan stack */
@@ -146,7 +156,24 @@ private:
 
 	MMINLINE bool setAbortedCycle();
 	MMINLINE bool isAbortedCycle();
-	MMINLINE bool isBreadthFirst();
+
+	MMINLINE bool isAnyFlushConditionSet() { return breadth_first < _flushState; }
+
+	MMINLINE void
+	setFlushCondition(FlushCondition condition, bool value)
+	{
+		if (value) {
+			_flushState |= (uintptr_t)condition;
+		} else {
+			_flushState &= ~(uintptr_t)condition;
+		}
+	}
+
+	MMINLINE bool
+	testFlushCondition(FlushCondition condition)
+	{
+		return (0 != (_flushState & (uintptr_t)condition));
+	}
 
 	MMINLINE void debugStack(const char *stackOp, bool treatAsWork = false);
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
@@ -427,6 +454,7 @@ public:
 		, _workReleaseThreshold(0)
 		, _tenureMask(0)
 		, _stats(NULL)
+		, _flushState(0)
 		, _stackBottom(MM_EvacuatorScanspace::newInstanceArray(_forge, OMR_MAX(unreachable, _maxStackDepth)))
 		, _stackCeiling(_stackBottom + OMR_MAX(unreachable, _maxStackDepth))
 		, _stackLimit(_stackCeiling)

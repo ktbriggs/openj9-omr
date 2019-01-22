@@ -205,13 +205,17 @@ MM_Evacuator::evacuateRootObject(MM_ForwardedHeader *forwardedHeader, bool bread
 
 		if (!isAbortedCycle()) {
 
+			/* clear stack overflow condition */
+			setFlushCondition(inside_overflow, false);
+			setFlushCondition(depth_first, false);
+
 			/* slot object must be evacuated -- determine before and after object size and which evacuation region should receive this object */
 			uintptr_t slotObjectSizeAfterCopy = 0, slotObjectSizeBeforeCopy = 0, hotFieldAlignmentDescriptor = 0;
 			_objectModel->calculateObjectDetailsForCopy(_env, forwardedHeader, &slotObjectSizeBeforeCopy, &slotObjectSizeAfterCopy, &hotFieldAlignmentDescriptor);
 			EvacuationRegion const evacuationRegion = isNurseryAge(_objectModel->getPreservedAge(forwardedHeader)) ? survivor : tenure;
 
 			/* can this object be spun out on the stack? */
-			_scanStackFrame = !breadthFirst ? reserveRootCopyspace(evacuationRegion, slotObjectSizeAfterCopy) : NULL;
+			_scanStackFrame = (!breadthFirst && !shouldFlushOutside()) ? reserveRootCopyspace(evacuationRegion, slotObjectSizeAfterCopy) : NULL;
 			if (NULL != _scanStackFrame) {
 				Debug_MM_true(_scanStackFrame == _whiteStackFrame[evacuationRegion]);
 
@@ -228,14 +232,13 @@ MM_Evacuator::evacuateRootObject(MM_ForwardedHeader *forwardedHeader, bool bread
 #endif /* defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS) */
 
 					/* try to pull remaining whitespace up to next stack frame to force push for referents scanned in root object */
-					MM_EvacuatorScanspace * const nextFrame = nextStackFrame(evacuationRegion, _scanStackFrame + 1);
-					if (NULL != nextFrame) {
-						nextFrame->pullWhitespace(_scanStackFrame);
-						_whiteStackFrame[evacuationRegion] = nextFrame;
+					if (!testFlushCondition(breadth_first)) {
+						MM_EvacuatorScanspace * const nextFrame = nextStackFrame(evacuationRegion, _scanStackFrame + 1);
+						if (NULL != nextFrame) {
+							nextFrame->pullWhitespace(_scanStackFrame);
+							_whiteStackFrame[evacuationRegion] = nextFrame;
+						}
 					}
-
-					/* scan evacuated root object, copy and scan reachable nursery objects until both outside copyspaces are empty */
-					scan();
 
 					Debug_MM_true(NULL == _scanStackFrame);
 					Debug_MM_true(0 == _stackBottom->getWorkSize());
@@ -248,18 +251,13 @@ MM_Evacuator::evacuateRootObject(MM_ForwardedHeader *forwardedHeader, bool bread
 
 			} else {
 
-				/* copy object to outside copyspace */
-				MM_EvacuatorScanspace *insideFrame = NULL;
-				forwardedAddress = copyOutside(evacuationRegion, forwardedHeader, NULL, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy, &insideFrame);
-
-				/* outside copy may be redirected into stack if outside copyspace not possible */
-				if (NULL != insideFrame) {
-					/* push and scan copied object */
-					push(insideFrame);
-					scan();
-				}
+				/* copy object to outside copyspace -- this may redirect copy to stack whitespace */
+				forwardedAddress = copyOutside(evacuationRegion, forwardedHeader, NULL, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy, &_scanStackFrame);
 			}
 		}
+
+		/* scan stack until empty */
+		scan();
 
 	} else {
 
@@ -384,12 +382,6 @@ MM_Evacuator::isAbortedCycle()
 	return _abortedCycle;
 }
 
-bool
-MM_Evacuator::isBreadthFirst()
-{
-	return _controller->isEvacuatorFlagSet(MM_EvacuatorController::breadthFirstScan);
-}
-
 void
 MM_Evacuator::flushRememberedSet()
 {
@@ -434,11 +426,12 @@ MM_Evacuator::workThreadGarbageCollect(MM_EnvironmentStandard *env)
 		_whiteStackFrame[region] = &_stackBottom[region];
 	}
 
-	/* reset remaining stack frames and scan/limit frame pointers */
+	/* set flush state and reset remaining stack frames and scan/limit frame pointers */
+	_flushState = _controller->isEvacuatorFlagSet(MM_EvacuatorController::breadthFirstScan) ? breadth_first : 0;
 	for (_scanStackFrame = _stackBottom + evacuate; _scanStackFrame < _stackCeiling; _scanStackFrame += 1) {
 		_scanStackFrame->clear();
 	}
-	_stackLimit = isBreadthFirst() ? (_stackBottom + 1) : _stackCeiling;
+	_stackLimit = _stackCeiling;
 	_scanStackFrame = NULL;
 
 	/* scan roots and remembered set and objects depending from these */
@@ -601,7 +594,7 @@ MM_Evacuator::scanComplete()
 #endif /* defined(EVACUATOR_DEBUG) */
 
 	/* reset stack  */
-	_stackLimit = isBreadthFirst() ? (_stackBottom + 1) : _stackCeiling;
+	_stackLimit = _stackCeiling;
 
 	/* all done heap scan */
 	Debug_MM_true(!_completedScan);
@@ -826,7 +819,11 @@ MM_Evacuator::clear()
 	Debug_MM_true(0 == _stackBottom->getWorkSize());
 	Debug_MM_true(0 == _stackBottom[evacuate].getWorkSize());
 
-	MM_EvacuatorScanspace * const scan = isBreadthFirst() ? (_stackBottom + evacuate) : _stackBottom;
+	/* clear stack overflow condition for next work pulled into stack */
+	setFlushCondition(inside_overflow, false);
+
+	const bool isBreadthFirst = testFlushCondition(breadth_first);
+	MM_EvacuatorScanspace * const scan = isBreadthFirst ? (_stackBottom + evacuate) : _stackBottom;
 
 	/* unconditionally clear whitespace from scan frame -- find an empty frame to receive it */
 	if (0 < scan->getWhiteSize()) {
@@ -834,7 +831,7 @@ MM_Evacuator::clear()
 
 		/* find next empty frame that can receive whitespace from the scan frame */
 		EvacuationRegion scanRegion = getEvacuationRegion(scan->getBase());
-		MM_EvacuatorScanspace * const whiteFrame = nextStackFrame(scanRegion, (isBreadthFirst() ? _stackBottom : (scan + 1)));
+		MM_EvacuatorScanspace * const whiteFrame = nextStackFrame(scanRegion, (isBreadthFirst ? _stackBottom : (scan + 1)));
 
 		Debug_MM_true(NULL != whiteFrame);
 		Debug_MM_true(0 == whiteFrame->getWorkSize());
@@ -860,7 +857,7 @@ MM_Evacuator::pull(MM_EvacuatorCopyspace *copyspace)
 	/* object scanners will be instantiated and _scannedBytes updated as objects in scanspace are scanned */
 	_splitArrayBytesToScan = 0;
 
-#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
 	_scanStackFrame->activated();
 #if defined(EVACUATOR_DEBUG)
 	if (_controller->_debugger.isDebugWork()) {
@@ -883,6 +880,8 @@ MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
 	Debug_MM_true(0 < work->length);
 	Debug_MM_true(NULL != work->base);
 
+	/* force depth first scanning if stack overflowed and flushed as it unwound */
+	setFlushCondition(depth_first, testFlushCondition(inside_overflow));
 	/* select stack frame to pull work into */
 	_scanStackFrame = clear();
 
@@ -905,7 +904,7 @@ MM_Evacuator::pull(MM_EvacuatorWorkPacket *work)
 		_splitArrayBytesToScan = 0;
 	}
 
-#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
+	#if defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
 	_scanStackFrame->activated();
 #if defined(EVACUATOR_DEBUG)
 	if (_controller->_debugger.isDebugWork()) {
@@ -926,8 +925,8 @@ MM_Evacuator::scan()
 {
 	/* scan stack until empty */
 	while (NULL != _scanStackFrame) {
-		Debug_MM_true((_stackLimit == (_stackBottom + _maxStackDepth)) || (_stackLimit == (_stackBottom + 1)));
-		Debug_MM_true((_stackLimit > _scanStackFrame) || (_stackLimit == (_stackBottom + 1)));
+		Debug_MM_true((_stackLimit == _stackCeiling) || (_stackLimit == _stackBottom));
+		Debug_MM_true((_scanStackFrame < _stackLimit) || (_stackLimit == _stackBottom));
 		Debug_MM_true(_scanStackFrame >= _stackBottom);
 
 		/* copy inside current frame until push or pop */
@@ -984,9 +983,8 @@ MM_Evacuator::copy()
 {
 	const uintptr_t sizeLimit = _maxInsideCopySize;
 	MM_EvacuatorScanspace * const stackFrame = _scanStackFrame;
-	uint8_t * const frameLimit = stackFrame->getBase() + _maxInsideCopyDistance;
+	uint8_t * const frameLimit = stackFrame->getBase() + (testFlushCondition(depth_first) ? 0: _maxInsideCopyDistance);
 	const bool isTenureFrame = (tenure == getEvacuationRegion(stackFrame->getBase()));
-	const bool allowPush = !isBreadthFirst();
 
 	/* get the active object scanner without advancing slot */
 	GC_ObjectScanner *objectScanner = nextObjectScanner(stackFrame, false);
@@ -1011,20 +1009,19 @@ MM_Evacuator::copy()
 					uintptr_t slotObjectSizeBeforeCopy = 0, slotObjectSizeAfterCopy = 0, hotFieldAlignmentDescriptor = 0;
 					_objectModel->calculateObjectDetailsForCopy(_env, &forwardedHeader, &slotObjectSizeBeforeCopy, &slotObjectSizeAfterCopy, &hotFieldAlignmentDescriptor);
 					const EvacuationRegion evacuationRegion = isNurseryAge(_objectModel->getPreservedAge(&forwardedHeader)) ? survivor : tenure;
+					const uintptr_t whiteStackFrameRemainder = _whiteStackFrame[evacuationRegion]->getWhiteSize();
 
 					/* copy flush overflow and large objects outside,  copy small objects inside the stack if sufficient whitespace remaining ... */
-					const bool tryInside = allowPush && (sizeLimit >= slotObjectSizeAfterCopy) && (0 == _largeObjectOverflow[evacuationRegion]) && !shouldFlushOutside();
-					const uintptr_t whiteStackFrameRemainder = _whiteStackFrame[evacuationRegion]->getWhiteSize();
-					if (tryInside && ((whiteStackFrameRemainder >= slotObjectSizeAfterCopy) ||
+					if (!shouldFlushOutside() && (sizeLimit >= slotObjectSizeAfterCopy) && ((whiteStackFrameRemainder >= slotObjectSizeAfterCopy) ||
 						/* ... or current whitespace remainder is discardable ... */
 						((MM_EvacuatorBase::max_scanspace_remainder >= whiteStackFrameRemainder) &&
 							/* ... and stack whitespace for evacuation region can be refreshed in another stack frame */
 							reserveInsideCopyspace(evacuationRegion, whiteStackFrameRemainder, slotObjectSizeAfterCopy)))
 					) {
-
-						/* copy inside stack frame holding evacuation region whitespace */
 						MM_EvacuatorScanspace * const whiteFrame = _whiteStackFrame[evacuationRegion];
 						uint8_t * const copyHead = whiteFrame->getCopyHead();
+
+						/* copy inside stack frame holding evacuation region whitespace */
 						forwardedAddress = copyForward(slotObject, whiteFrame, slotObjectSizeBeforeCopy, slotObjectSizeAfterCopy);
 
 						/* if object was copied into scan frame past copy limit or into superior frame a push may be necessary */
@@ -1106,16 +1103,19 @@ MM_Evacuator::shouldFlushOutside()
 {
 	Debug_MM_true(_stackLimit <= _stackCeiling);
 
-	/* this should not be called in breadth-first workflow */
-	Debug_MM_true(!isBreadthFirst());
+	/* check for stalled evacuators */
+	setFlushCondition(stall, _controller->areAnyEvacuatorsStalled());
 
 	/* toggle stack limit between bottom+1 and ceiling to force/end flushing all copy to outside copyspaces */
-	if ((_stackLimit == _stackCeiling) && _controller->areAnyEvacuatorsStalled()) {
+	if (isAnyFlushConditionSet()) {
 
-		/* reduce work release threshold to lower bound of operational range */
-		_workReleaseThreshold = _controller->_minimumWorkspaceSize;
-		/* lower stack limit to mark start of flushing lower work release threshold if thrashing on residual outside copy to produce distributable work while flushing */
-		_stackLimit = _stackBottom + 1;
+		if (_stackLimit == _stackCeiling) {
+
+			/* reduce work release threshold to lower bound of operational range */
+			_workReleaseThreshold = _controller->_minimumWorkspaceSize;
+			/* lower stack limit to mark start of flushing lower work release threshold if thrashing on residual outside copy to produce distributable work while flushing */
+			_stackLimit = _stackBottom;
+		}
 
 		return true;
 
@@ -1125,11 +1125,7 @@ MM_Evacuator::shouldFlushOutside()
 		_workReleaseThreshold = OMR_MAX(_workReleaseThreshold, _controller->_minimumWorkspaceSize);
 		/* raise stack limit to mark end of flushing */
 		_stackLimit = _stackCeiling;
-
-		return false;
 	}
-
-	Debug_MM_true(_stackLimit == _stackCeiling);
 
 	return false;
 }
@@ -1141,7 +1137,8 @@ MM_Evacuator::nextStackFrame(const EvacuationRegion evacuationRegion, MM_Evacuat
 		frame += 1;
 	}
 
-	if ((frame >= _stackCeiling) || ((frame >= _stackLimit) && (_stackLimit > (_stackBottom + 1)))) {
+	if (frame >= _stackCeiling) {
+		setFlushCondition(inside_overflow, true);
 		frame = NULL;
 	}
 
@@ -1271,7 +1268,7 @@ MM_Evacuator::reserveInsideCopyspace(const EvacuationRegion evacuationRegion, co
 MM_EvacuatorScanspace *
 MM_Evacuator::reserveRootCopyspace(const EvacuationRegion& evacuationRegion, uintptr_t slotObjectSizeAfterCopy)
 {
-	MM_EvacuatorScanspace *rootFrame = !isBreadthFirst() ? nextStackFrame(evacuationRegion, _stackBottom) : _whiteStackFrame[evacuationRegion];
+	MM_EvacuatorScanspace *rootFrame = testFlushCondition(breadth_first) ? _whiteStackFrame[evacuationRegion] : nextStackFrame(evacuationRegion, _stackBottom);
 
 	if (NULL != rootFrame) {
 
@@ -1433,17 +1430,18 @@ MM_Evacuator::reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const 
 				whitespace = _controller->getWhitespace(this, *evacuationRegion, slotObjectSizeAfterCopy);
 				if (NULL != whitespace) {
 					_largeObjectOverflow[*evacuationRegion] = 0;
+					setFlushCondition(outside_overflow, false);
 					break;
 				}
 			}
 
 			/* no available whitespace in copyspace so update or set up large object overflow to redirect small objects for region from inside to outside copy */
-			if (0 < _largeObjectOverflow[*evacuationRegion]) {
+			if (testFlushCondition(outside_overflow)) {
 				/* (slot object size after copy) > (copyspace remainder) > (minimum whitespace discard threshold) */
 				_largeObjectOverflow[*evacuationRegion] += slotObjectSizeAfterCopy;
 			} else {
 				/* start counting size of objects overflowing copyspace */
-				_largeObjectOverflow[*evacuationRegion] = 1;
+				setFlushCondition(outside_overflow, true);
 			}
 
 			/* try injecting into stack whitespace at or below current scan frame */
