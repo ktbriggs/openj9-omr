@@ -63,11 +63,11 @@ public:
 private:
 	/* Enumeration of conditions that relate to flushing */
 	typedef enum FlushCondition {
-		breadth_first = 1			/* always flush */
-		, depth_first = 2			/* holding inside copy distance at 0 to force depth-first until inside overflow and outside copyspaces cleared and stack empty */
-		, inside_overflow = 4		/* forcing flush while winding down stack after stack overflow */
-		, outside_overflow = 8		/* forcing flush to fill outside copyspace remainder */
-		, stall = 16				/* forcing flush to service stalled ecavuators */
+		breadth_first = 1			/* always flush all objects to outside copyspaces */
+		, depth_first = 2			/* holding inside copy distance at 0 to force depth-first push/up flush/down until stack_overflow cleared */
+		, stack_overflow = 4		/* forcing flush while winding down stack after stack overflow */
+		, copyspace_overflow = 8	/* forcing flush to fill outside copyspace remainder */
+		, stall = 16				/* forcing flush to service stalled evacuators */
 	} FlushCondition;
 
 	const uintptr_t _maxStackDepth;					/* number of frames to allocate for the scan stack */
@@ -102,7 +102,7 @@ private:
 	MM_EvacuatorWorklist _workList;					/* FIFO queue of large packets of unscanned work, in survivor or tenure space */
 	MM_EvacuatorFreelist _freeList;					/* LIFO queue of empty work packets */
 
-	uintptr_t _largeObjectOverflow[2];				/* counts large objects overflowing outside copyspaces, reset when outside copyspace is refreshed */
+	uintptr_t _copyspaceOverflow[2];				/* counts large objects overflowing outside copyspaces, reset when outside copyspace is refreshed */
 	uint8_t *_heapBounds[3][2];						/* lower and upper bounds for nursery semispaces and tenure space */
 
 	bool _completedScan;							/* set when heap scan is complete, cleared before heap scan starts */
@@ -134,7 +134,7 @@ private:
 	MMINLINE void pop();
 
 	MMINLINE bool shouldFlushOutside();
-	MMINLINE uintptr_t maximumLargeObjectOverflow();
+	MMINLINE uintptr_t copyspaceOverflowThreshold();
 	MMINLINE MM_EvacuatorCopyspace *reserveOutsideCopyspace(EvacuationRegion *evacuationRegion, const uintptr_t slotObjectSizeAfterCopy, bool useLargeCopyspace);
 	MMINLINE omrobjectptr_t copyOutside(EvacuationRegion evacuationRegion, MM_ForwardedHeader *forwardedHeader, fomrobject_t *referringSlotAddress, const uintptr_t slotObjectSizeBeforeCopy, const uintptr_t slotObjectSizeAfterCopy, MM_EvacuatorScanspace **stackFrame);
 
@@ -157,7 +157,6 @@ private:
 	MMINLINE bool setAbortedCycle();
 	MMINLINE bool isAbortedCycle();
 
-	MMINLINE bool isAnyFlushConditionSet() { return breadth_first < _flushState; }
 
 	MMINLINE void
 	setFlushCondition(FlushCondition condition, bool value)
@@ -168,12 +167,8 @@ private:
 			_flushState &= ~(uintptr_t)condition;
 		}
 	}
-
-	MMINLINE bool
-	testFlushCondition(FlushCondition condition)
-	{
-		return (0 != (_flushState & (uintptr_t)condition));
-	}
+	MMINLINE bool testFlushCondition(FlushCondition condition) { return (0 != (_flushState & (uintptr_t)condition)); }
+	MMINLINE bool isAnyFlushConditionSet() { return ((uintptr_t)breadth_first + (uintptr_t)depth_first) <= _flushState; }
 
 	MMINLINE void debugStack(const char *stackOp, bool treatAsWork = false);
 #if defined(J9MODRON_TGC_PARALLEL_STATISTICS) || defined(EVACUATOR_DEBUG) || defined(EVACUATOR_DEBUG_ALWAYS)
@@ -385,7 +380,7 @@ public:
 	 * Controller calls this when it allocates a TLH from survivor or tenure region that is too small to hold
 	 * the current object. The evacuator adds the unused TLH to the whitelist for the containing region.
 	 */
-	void reserveWhitespace(MM_EvacuatorWhitespace *whitespace);
+	void receiveWhitespace(MM_EvacuatorWhitespace *whitespace);
 
 	/**
 	 * Per gc, bind evacuator instance to worker thread and set up evacuator environment, clear evacuator gc stats
@@ -468,7 +463,7 @@ public:
 		_typeId = __FUNCTION__;
 
 		_copiedBytesDelta[survivor] = _copiedBytesDelta[tenure] = 0;
-		_largeObjectOverflow[survivor] = _largeObjectOverflow[tenure] = 0;
+		_copyspaceOverflow[survivor] = _copyspaceOverflow[tenure] = 0;
 		_whiteStackFrame[survivor] = _whiteStackFrame[tenure] = NULL;
 
 		Debug_MM_true(0 == (_objectModel->getObjectAlignmentInBytes() % sizeof(uintptr_t)));

@@ -1437,7 +1437,7 @@ public:
 		, scvTenureStrategyHistory(true)
 		, scavengerEnabled(false)
 		, scavengerRsoScanUnsafe(false)
-		, evacuatorEnabled(true)
+		, evacuatorEnabled(false)
 #if defined(OMR_GC_CONCURRENT_SCAVENGER)
 		, softwareRangeCheckReadBarrier(false)
 		, concurrentScavenger(false)

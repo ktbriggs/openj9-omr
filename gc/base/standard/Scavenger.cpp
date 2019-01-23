@@ -3944,7 +3944,7 @@ MM_Scavenger::masterThreadGarbageCollect(MM_EnvironmentBase *envBase, MM_Allocat
 				uint64_t sumActivations = sumStackActivations(stackActivations, maxFrame);
 				omrtty_printf("%5llu      :     stack;", (uint64_t)stats->_gcCount);
 				for (uintptr_t depth = 0; depth < maxFrame; depth += 1) {
-					omrtty_printf(" %0.3f", (double)stackActivations[depth] / (double)sumActivations);
+					omrtty_printf(" %5.2f", (double)stackActivations[depth] / (double)sumActivations);
 				}
 				omrtty_printf(" %llu\n", sumActivations);
 			}

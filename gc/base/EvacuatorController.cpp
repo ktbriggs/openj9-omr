@@ -615,7 +615,7 @@ MM_EvacuatorController::getWhitespace(MM_Evacuator *evacuator, MM_Evacuator::Eva
 
 		/* hand off any unused tlh allocation to evacuator to reuse later */
 		if ((NULL != whitespace) && (whitespace->length() < length)) {
-			evacuator->reserveWhitespace(whitespace);
+			evacuator->receiveWhitespace(whitespace);
 			whitespace = NULL;
 		}
 	}
